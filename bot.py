@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import sqlite3
 from contextlib import closing
 
@@ -15,7 +16,6 @@ logging.basicConfig(level=logging.INFO)
 dp = Dispatcher()
 ADDING_USERS = set()
 
-# Persistent reply keyboard: Telegram displays these buttons above the chat input.
 MENU = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 Add Task"), KeyboardButton(text="📋 My Tasks")],
@@ -29,12 +29,13 @@ MENU = ReplyKeyboardMarkup(
 WELCOME = (
     "👋 <b>Welcome to Drew Bot!</b>\n\n"
     "📝 <b>Your simple Telegram to-do list.</b>\n\n"
-    "Create tasks, view your saved list, mark tasks as completed, and delete tasks when you no longer need them.\n\n"
+    "Create tasks, view your saved list, mark tasks as completed, and delete tasks when finished.\n\n"
     "🚀 <b>Try it now:</b>\n"
     "1️⃣ Tap <b>📝 Add Task</b> below.\n"
     "2️⃣ Send: <code>Buy groceries</code>\n"
-    "3️⃣ Tap <b>📋 My Tasks</b>.\n\n"
-    "Your tasks are saved separately for your Telegram account.\n\n"
+    "3️⃣ Tap <b>📋 My Tasks</b>.\n"
+    "4️⃣ Send <code>complete ID</code> to finish a task or <code>delete ID</code> to remove it.\n\n"
+    "💾 Your tasks are saved for your Telegram account.\n\n"
     "Choose an option below to get started 👇"
 )
 
@@ -86,7 +87,7 @@ async def help_message(message: Message):
         "📋 <b>My Tasks</b> — view all tasks saved to your account.\n\n"
         "✅ <b>Complete</b> — send <code>complete ID</code> after viewing your tasks.\n\n"
         "🗑️ <b>Delete</b> — send <code>delete ID</code> to remove a task.\n\n"
-        "<b>Quick example:</b>\n"
+        "💡 <b>Quick example:</b>\n"
         "📝 Add Task → <code>Buy groceries</code> → 📋 My Tasks → <code>complete 1</code>\n\n"
         "Use /start anytime to return to the welcome screen.",
         parse_mode="HTML",
@@ -107,7 +108,7 @@ async def add_task(message: Message):
         "📝 <b>ADD A TASK</b>\n\n"
         "Send the task you want to save.\n\n"
         "💡 <b>Example:</b> <code>Buy groceries</code>\n\n"
-        "You can also type /cancel to stop.",
+        "Type /cancel if you change your mind.",
         parse_mode="HTML",
         reply_markup=MENU,
     )
@@ -139,17 +140,14 @@ async def my_tasks(message: Message):
     open_count = 0
     completed_count = 0
     for task_id, text, completed in rows:
-        if completed:
-            status = "✅"
-            completed_count += 1
-        else:
-            status = "⬜"
-            open_count += 1
+        status = "✅" if completed else "⬜"
+        open_count += not completed
+        completed_count += bool(completed)
         lines.append(f"{status} <b>#{task_id}</b> — {text}")
 
     lines.append(
         f"\n📊 <b>{open_count}</b> open • <b>{completed_count}</b> completed\n\n"
-        "Manage a task with:\n"
+        "Manage a task:\n"
         "<code>complete ID</code> — mark complete\n"
         "<code>delete ID</code> — delete it\n\n"
         "Example: <code>complete 1</code>"
@@ -157,7 +155,7 @@ async def my_tasks(message: Message):
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=MENU)
 
 
-@dp.message(F.text.regexp(r"^(?i)complete\s+\d+$"))
+@dp.message(F.text.regexp(re.compile(r"^complete\s+\d+$", re.IGNORECASE)))
 async def complete_task(message: Message):
     ADDING_USERS.discard(message.from_user.id)
     task_id = int(message.text.split()[1])
@@ -185,7 +183,7 @@ async def complete_task(message: Message):
         )
 
 
-@dp.message(F.text.regexp(r"^(?i)delete\s+\d+$"))
+@dp.message(F.text.regexp(re.compile(r"^delete\s+\d+$", re.IGNORECASE)))
 async def delete_task(message: Message):
     ADDING_USERS.discard(message.from_user.id)
     task_id = int(message.text.split()[1])
