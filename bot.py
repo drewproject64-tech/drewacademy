@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import re
 import sqlite3
 from contextlib import closing
 
@@ -19,24 +18,20 @@ ADDING_USERS = set()
 MENU = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 Add Task"), KeyboardButton(text="📋 My Tasks")],
+        [KeyboardButton(text="✅ Complete Task"), KeyboardButton(text="🗑️ Delete Task")],
         [KeyboardButton(text="❓ How to Use"), KeyboardButton(text="🏠 Main Menu")],
     ],
     resize_keyboard=True,
     is_persistent=True,
-    input_field_placeholder="Choose an option or type a command",
+    input_field_placeholder="Choose an option below",
 )
 
 WELCOME = (
     "👋 <b>Welcome to Drew Bot!</b>\n\n"
-    "📝 <b>Your simple Telegram to-do list.</b>\n\n"
-    "Create tasks, view your saved list, mark tasks as completed, and delete tasks when finished.\n\n"
-    "🚀 <b>Try it now:</b>\n"
-    "1️⃣ Tap <b>📝 Add Task</b> below.\n"
-    "2️⃣ Send: <code>Buy groceries</code>\n"
-    "3️⃣ Tap <b>📋 My Tasks</b>.\n"
-    "4️⃣ Send <code>complete ID</code> to finish a task or <code>delete ID</code> to remove it.\n\n"
-    "💾 Your tasks are saved for your Telegram account.\n\n"
-    "Choose an option below to get started 👇"
+    "📝 Drew Bot is a simple Telegram to-do list that helps you create, save, view, complete, and delete tasks directly in your chat.\n\n"
+    "🚀 <b>Try the example:</b> tap 📝 Add Task and send <code>Buy groceries</code>. "
+    "Then tap 📋 My Tasks to see your saved task.\n\n"
+    "Use the buttons below to get started 👇"
 )
 
 
@@ -54,7 +49,7 @@ def get_db():
     return conn
 
 
-def get_user_tasks(user_id):
+def get_tasks(user_id):
     with closing(get_db()) as conn:
         return conn.execute(
             "SELECT id, text, completed FROM tasks WHERE user_id=? ORDER BY completed ASC, id ASC",
@@ -62,14 +57,12 @@ def get_user_tasks(user_id):
         ).fetchall()
 
 
-def main_menu_text():
-    return (
-        "🏠 <b>Drew Bot</b>\n\n"
-        "What would you like to do?\n\n"
-        "📝 Add a task\n"
-        "📋 View your saved tasks\n"
-        "❓ Learn how the bot works"
-    )
+def task_by_id(user_id, task_id):
+    with closing(get_db()) as conn:
+        return conn.execute(
+            "SELECT id, text, completed FROM tasks WHERE id=? AND user_id=?",
+            (task_id, user_id),
+        ).fetchone()
 
 
 async def start(message: Message):
@@ -83,34 +76,29 @@ async def help_message(message: Message):
     ADDING_USERS.discard(message.from_user.id)
     await message.answer(
         "❓ <b>HOW TO USE DREW BOT</b>\n\n"
-        "📝 <b>Add Task</b> — tap the button and send the task you want to save.\n\n"
-        "📋 <b>My Tasks</b> — view all tasks saved to your account.\n\n"
-        "✅ <b>Complete</b> — send <code>complete ID</code> after viewing your tasks.\n\n"
-        "🗑️ <b>Delete</b> — send <code>delete ID</code> to remove a task.\n\n"
-        "💡 <b>Quick example:</b>\n"
-        "📝 Add Task → <code>Buy groceries</code> → 📋 My Tasks → <code>complete 1</code>\n\n"
-        "Use /start anytime to return to the welcome screen.",
-        parse_mode="HTML",
-        reply_markup=MENU,
+        "📝 Add Task — tap it, then send your task.\n"
+        "📋 My Tasks — view your saved tasks and their IDs.\n"
+        "✅ Complete Task — enter the ID of a task to mark it complete.\n"
+        "🗑️ Delete Task — enter the ID of a task to remove it.\n\n"
+        "💡 <b>Example:</b> Add Task → <code>Buy groceries</code> → My Tasks → Complete Task → <code>1</code>.\n\n"
+        "Use /start anytime to return to the main screen.",
+        parse_mode="HTML", reply_markup=MENU,
     )
 
 
 @dp.message(F.text == "🏠 Main Menu")
 async def main_menu(message: Message):
     ADDING_USERS.discard(message.from_user.id)
-    await message.answer(main_menu_text(), parse_mode="HTML", reply_markup=MENU)
+    await message.answer(WELCOME, parse_mode="HTML", reply_markup=MENU)
 
 
 @dp.message(F.text == "📝 Add Task")
 async def add_task(message: Message):
     ADDING_USERS.add(message.from_user.id)
     await message.answer(
-        "📝 <b>ADD A TASK</b>\n\n"
-        "Send the task you want to save.\n\n"
-        "💡 <b>Example:</b> <code>Buy groceries</code>\n\n"
-        "Type /cancel if you change your mind.",
-        parse_mode="HTML",
-        reply_markup=MENU,
+        "📝 <b>ADD A TASK</b>\n\nSend the task you want to save.\n\n"
+        "💡 Example: <code>Buy groceries</code>\n\nType /cancel to stop.",
+        parse_mode="HTML", reply_markup=MENU,
     )
 
 
@@ -123,113 +111,99 @@ async def cancel(message: Message):
 @dp.message(F.text == "📋 My Tasks")
 async def my_tasks(message: Message):
     ADDING_USERS.discard(message.from_user.id)
-    rows = get_user_tasks(message.from_user.id)
-
+    rows = get_tasks(message.from_user.id)
     if not rows:
         await message.answer(
-            "📋 <b>MY TASKS</b>\n\n"
-            "Your task list is empty.\n\n"
-            "Tap 📝 Add Task to create your first task.\n\n"
-            "💡 Example: <code>Buy groceries</code>",
-            parse_mode="HTML",
-            reply_markup=MENU,
+            "📋 <b>MY TASKS</b>\n\nYour list is empty.\n\n"
+            "Tap 📝 Add Task and try <code>Buy groceries</code>.",
+            parse_mode="HTML", reply_markup=MENU,
         )
         return
 
     lines = ["📋 <b>MY TASKS</b>\n"]
-    open_count = 0
-    completed_count = 0
     for task_id, text, completed in rows:
         status = "✅" if completed else "⬜"
-        open_count += not completed
-        completed_count += bool(completed)
         lines.append(f"{status} <b>#{task_id}</b> — {text}")
-
-    lines.append(
-        f"\n📊 <b>{open_count}</b> open • <b>{completed_count}</b> completed\n\n"
-        "Manage a task:\n"
-        "<code>complete ID</code> — mark complete\n"
-        "<code>delete ID</code> — delete it\n\n"
-        "Example: <code>complete 1</code>"
-    )
+    lines.append("\nUse ✅ Complete Task or 🗑️ Delete Task and enter the task ID.")
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=MENU)
 
 
-@dp.message(F.text.regexp(re.compile(r"^complete\s+\d+$", re.IGNORECASE)))
-async def complete_task(message: Message):
+@dp.message(F.text == "✅ Complete Task")
+async def complete_prompt(message: Message):
     ADDING_USERS.discard(message.from_user.id)
-    task_id = int(message.text.split()[1])
-    with closing(get_db()) as conn:
-        cur = conn.execute(
-            "UPDATE tasks SET completed=1 WHERE id=? AND user_id=?",
-            (task_id, message.from_user.id),
-        )
-        conn.commit()
-        changed = cur.rowcount
-
-    if changed:
-        await message.answer(
-            f"✅ <b>Task #{task_id} completed!</b>\n\n"
-            "Your task list has been updated.\n\n"
-            "Tap 📋 My Tasks to view it.",
-            parse_mode="HTML",
-            reply_markup=MENU,
-        )
-    else:
-        await message.answer(
-            "⚠️ I couldn't find that task in your list.\n\n"
-            "Tap 📋 My Tasks to check the correct task ID.",
-            reply_markup=MENU,
-        )
+    rows = get_tasks(message.from_user.id)
+    if not rows:
+        await message.answer("📋 You have no tasks yet. Tap 📝 Add Task first.", reply_markup=MENU)
+        return
+    await message.answer(
+        "✅ <b>COMPLETE A TASK</b>\n\n"
+        "Enter the task ID you want to mark as completed.\n\n"
+        "Example: <code>1</code>",
+        parse_mode="HTML", reply_markup=MENU,
+    )
+    ADDING_USERS.add(f"complete:{message.from_user.id}")
 
 
-@dp.message(F.text.regexp(re.compile(r"^delete\s+\d+$", re.IGNORECASE)))
-async def delete_task(message: Message):
+@dp.message(F.text == "🗑️ Delete Task")
+async def delete_prompt(message: Message):
     ADDING_USERS.discard(message.from_user.id)
-    task_id = int(message.text.split()[1])
-    with closing(get_db()) as conn:
-        cur = conn.execute(
-            "DELETE FROM tasks WHERE id=? AND user_id=?",
-            (task_id, message.from_user.id),
-        )
-        conn.commit()
-        changed = cur.rowcount
+    rows = get_tasks(message.from_user.id)
+    if not rows:
+        await message.answer("📋 You have no tasks to delete.", reply_markup=MENU)
+        return
+    await message.answer(
+        "🗑️ <b>DELETE A TASK</b>\n\n"
+        "Enter the task ID you want to delete.\n\n"
+        "Example: <code>1</code>",
+        parse_mode="HTML", reply_markup=MENU,
+    )
+    ADDING_USERS.add(f"delete:{message.from_user.id}")
 
-    if changed:
-        await message.answer(
-            f"🗑️ <b>Task #{task_id} deleted.</b>\n\n"
-            "Your task list has been updated.\n\n"
-            "Tap 📋 My Tasks to check your remaining tasks.",
-            parse_mode="HTML",
-            reply_markup=MENU,
-        )
+
+async def handle_id_action(message: Message, action: str, task_id: int):
+    user_id = message.from_user.id
+    task = task_by_id(user_id, task_id)
+    if not task:
+        await message.answer("⚠️ Task not found. Tap 📋 My Tasks to check the correct ID.", reply_markup=MENU)
+        return
+
+    with closing(get_db()) as conn:
+        if action == "complete":
+            conn.execute("UPDATE tasks SET completed=1 WHERE id=? AND user_id=?", (task_id, user_id))
+        else:
+            conn.execute("DELETE FROM tasks WHERE id=? AND user_id=?", (task_id, user_id))
+        conn.commit()
+
+    if action == "complete":
+        await message.answer(f"✅ <b>Task #{task_id} completed!</b>\n\n{task[1]}", parse_mode="HTML", reply_markup=MENU)
     else:
-        await message.answer(
-            "⚠️ I couldn't find that task in your list.\n\n"
-            "Tap 📋 My Tasks to check the correct task ID.",
-            reply_markup=MENU,
-        )
+        await message.answer(f"🗑️ <b>Task #{task_id} deleted.</b>\n\n{task[1]}", parse_mode="HTML", reply_markup=MENU)
 
 
 @dp.message(F.text)
-async def receive_task(message: Message):
-    menu_text = {"📝 Add Task", "📋 My Tasks", "❓ How to Use", "🏠 Main Menu"}
-    if message.text in menu_text:
-        return
-
-    if message.from_user.id not in ADDING_USERS:
-        await message.answer(
-            "👋 <b>Ready to organize your tasks?</b>\n\n"
-            "Tap 📝 Add Task first.\n\n"
-            "💡 Quick example: tap 📝 Add Task and send <code>Buy groceries</code>.",
-            parse_mode="HTML",
-            reply_markup=MENU,
-        )
-        return
-
+async def receive_text(message: Message):
     text = message.text.strip()
-    if not text:
-        await message.answer("Please send a task with some text.", reply_markup=MENU)
+    user_id = message.from_user.id
+    if text in {"📝 Add Task", "📋 My Tasks", "✅ Complete Task", "🗑️ Delete Task", "❓ How to Use", "🏠 Main Menu"}:
+        return
+
+    state_complete = f"complete:{user_id}"
+    state_delete = f"delete:{user_id}"
+
+    if state_complete in ADDING_USERS or state_delete in ADDING_USERS:
+        if not text.isdigit():
+            await message.answer("Please enter a numeric task ID, for example <code>1</code>.", parse_mode="HTML", reply_markup=MENU)
+            return
+        ADDING_USERS.discard(state_complete)
+        ADDING_USERS.discard(state_delete)
+        await handle_id_action(message, "complete" if state_complete in ADDING_USERS or state_delete not in ADDING_USERS else "delete", int(text))
+        return
+
+    if user_id not in ADDING_USERS:
+        await message.answer(
+            "👋 Ready to organize your tasks?\n\nTap 📝 Add Task and send <code>Buy groceries</code> to try the bot.",
+            parse_mode="HTML", reply_markup=MENU,
+        )
         return
 
     if len(text) > 500:
@@ -237,20 +211,14 @@ async def receive_task(message: Message):
         return
 
     with closing(get_db()) as conn:
-        cur = conn.execute(
-            "INSERT INTO tasks (user_id, text) VALUES (?, ?)",
-            (message.from_user.id, text),
-        )
+        cur = conn.execute("INSERT INTO tasks (user_id, text) VALUES (?, ?)", (user_id, text))
         task_id = cur.lastrowid
         conn.commit()
 
-    ADDING_USERS.discard(message.from_user.id)
+    ADDING_USERS.discard(user_id)
     await message.answer(
-        f"✅ <b>Task saved!</b>\n\n"
-        f"⬜ <b>#{task_id}</b> — {text}\n\n"
-        "Tap 📋 My Tasks to view, complete, or delete it.",
-        parse_mode="HTML",
-        reply_markup=MENU,
+        f"✅ <b>Task saved!</b>\n\n⬜ <b>#{task_id}</b> — {text}\n\n"
+        "Tap 📋 My Tasks to view it.", parse_mode="HTML", reply_markup=MENU,
     )
 
 
