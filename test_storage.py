@@ -24,9 +24,6 @@ class StorageTests(unittest.TestCase):
             s = Storage(path)
             self.assertEqual(s.next_delivery()['user_id'], 2)
             s.reverse()
-            reverse_campaign = s.next_delivery()['id']
-            s.finish(reverse_campaign, 1, 'sent')
-            s.finish(reverse_campaign, 2, 'sent')
             self.assertIsNone(s.next_delivery())
             s.campaign('Special offer')
             self.assertEqual(s.next_delivery()['text'], 'Special offer')

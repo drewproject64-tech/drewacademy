@@ -24,6 +24,10 @@ class Storage:
           source_message INTEGER, cancelled INTEGER DEFAULT 0);
         ''')
         self.db.commit()
+        # Retire campaigns created with the earlier inverted mode behavior once.
+        if self.get('mode_version') != '2':
+            self.reverse()
+            self.set('mode_version', '2')
 
     def get(self, key, default=''):
         row = self.db.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
@@ -60,9 +64,9 @@ class Storage:
             if previous:
                 self.db.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (previous,))
             cursor = self.db.execute('INSERT INTO campaigns(text,source_chat,source_message) VALUES (?,?,?)',
-                (self.get('redirect_text', DEFAULT_MESSAGE),
-                 int(self.get('redirect_chat')) if self.get('redirect_chat') else None,
-                 int(self.get('redirect_message')) if self.get('redirect_message') else None))
+                (REVERSE_MESSAGE,
+                 None,
+                 None))
             campaign = cursor.lastrowid
             self.db.execute('INSERT INTO deliveries(campaign,user_id) SELECT ?,id FROM users WHERE active=1', (campaign,))
             self.db.executemany('INSERT OR REPLACE INTO settings VALUES (?,?)',
@@ -75,19 +79,15 @@ class Storage:
                 previous = self.get(key)
                 if previous:
                     self.db.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (previous,))
-            cursor = self.db.execute('INSERT INTO campaigns(text) VALUES (?)', (REVERSE_MESSAGE,))
-            campaign = cursor.lastrowid
-            self.db.execute('INSERT INTO deliveries(campaign,user_id) SELECT ?,id FROM users WHERE active=1', (campaign,))
-            self.db.executemany('INSERT OR REPLACE INTO settings VALUES (?,?)',
-                               [('mode', 'normal'), ('normal_campaign', str(campaign))])
-        return campaign
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES ('mode','normal')")
+            self.db.execute("DELETE FROM settings WHERE key='normal_campaign'")
 
     def started(self, user):
         self.save_user(user)
         with self.db:
             self.db.execute('UPDATE users SET active=1 WHERE id=?', (user.id,))
-        key = 'redirect_campaign' if self.get('mode') == 'redirect' else 'normal_campaign'
-        if self.get(key):
+        key = 'redirect_campaign'
+        if self.get('mode') == 'redirect' and self.get(key):
             with self.db:
                 self.db.execute('INSERT OR IGNORE INTO deliveries(campaign,user_id) VALUES (?,?)',
                                 (int(self.get(key)), user.id))

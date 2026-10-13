@@ -20,7 +20,6 @@ REVERSE_IMAGE = Path(__file__).resolve().parent / 'assets' / 'drew_fx_bull.png'
 def panel():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='REDIRECT', callback_data='redirect'), InlineKeyboardButton(text='REVERSE', callback_data='reverse')],
-        [InlineKeyboardButton(text='Set Redirect Message', callback_data='set_redirect')],
         [InlineKeyboardButton(text='Broadcast Message / Offer', callback_data='broadcast')],
         [InlineKeyboardButton(text='Users & Stats', callback_data='stats')],
         [InlineKeyboardButton(text='Cancel', callback_data='cancel')]])
@@ -38,8 +37,8 @@ async def start(message: Message):
     if admin(message):
         await message.answer('Administrator controls', reply_markup=panel())
         return
-    if store.get('mode') == 'redirect' or store.get('normal_campaign'):
-        await message.answer('Welcome! Your channel message will arrive shortly.')
+    if store.get('mode') == 'redirect':
+        return  # The persistent queue sends the image and caption.
     else:
         await message.answer(DEFAULT_MESSAGE)
 
@@ -75,8 +74,8 @@ async def action(message, name):
         await message.answer(f'Redirect enabled. Broadcast #{campaign} queued for saved users; new starters are included.')
     elif name == 'reverse':
         composer.pop(message.chat.id, None)
-        campaign = store.reverse()
-        await message.answer(f'Reverse enabled. Personalized DREW FX broadcast #{campaign} queued with the Join Community button. New starters are included.')
+        store.reverse()
+        await message.answer('Normal mode restored. New /start requests receive the original XAUUSD message. Pending redirect deliveries stopped.')
     elif name in ('broadcast', 'set_redirect'):
         composer[message.chat.id] = name
         await message.answer('Send the text, photo, video or other single message to use. /cancel to cancel.' +

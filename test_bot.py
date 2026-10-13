@@ -10,6 +10,21 @@ from test_storage import user
 
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_normal_redirect_then_reverse(self):
+        message = SimpleNamespace(chat=SimpleNamespace(type='private', id=1),
+                                  from_user=user(1), answer=AsyncMock())
+        await bot.start(message)
+        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
+        bot.store.enable_redirect()
+        message.answer.reset_mock()
+        await bot.start(message)
+        message.answer.assert_not_awaited()
+        self.assertEqual(bot.store.next_delivery()['text'], bot.REVERSE_MESSAGE)
+        bot.store.reverse()
+        self.assertIsNone(bot.store.next_delivery())
+        await bot.start(message)
+        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
+
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         bot.store = Storage(self.directory.name + '/db')
@@ -55,7 +70,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reverse_personalizes_and_adds_join_button(self):
         bot.store.started(user(1))
-        campaign = bot.store.reverse()
+        campaign = bot.store.enable_redirect()
         telegram = SimpleNamespace(send_message=AsyncMock(), copy_message=AsyncMock())
         task = asyncio.create_task(bot.worker(telegram))
         await asyncio.sleep(0.02)
@@ -70,7 +85,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reverse_attaches_uploaded_image(self):
         bot.store.started(user(1))
-        bot.store.reverse()
+        bot.store.enable_redirect()
         telegram = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
         with patch.object(bot.Path, 'is_file', return_value=True):
             task = asyncio.create_task(bot.worker(telegram))
