@@ -25,7 +25,17 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
                                   from_user=user(1), answer=AsyncMock())
         await bot.commands(message)
         self.assertEqual(bot.store.get('mode', 'normal'), 'normal')
-        message.answer.assert_awaited_once_with('Administrator only.')
+        self.assertIn('Administrator only.', message.answer.await_args.args[0])
+
+    async def test_admin_start_shows_panel(self):
+        message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
+                                  from_user=user(99), answer=AsyncMock())
+        await bot.start(message)
+        call = message.answer.await_args
+        self.assertEqual(call.args[0], 'Administrator controls')
+        buttons = [button.callback_data for row in call.kwargs['reply_markup'].inline_keyboard for button in row]
+        self.assertIn('reverse', buttons)
+        self.assertIn('redirect', buttons)
 
     async def test_worker_sends_saved_campaign(self):
         bot.store.started(user(1))
