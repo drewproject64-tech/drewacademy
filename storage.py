@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 DEFAULT_MESSAGE = 'Get XAUUSD Daily 5-8 Free Signals Free Available Join Now 👊👇👇👇👇https://t.me/Drewcommunity'
+REVERSE_MESSAGE = '{name}, DON’T MISS OUT AGAIN! 🔥\n\nThe DREW FX community is active with exclusive signals, and the session is still ongoing. Join now and stay up to date with everything!'
 
 
 class Storage:
@@ -52,6 +53,9 @@ class Storage:
     def enable_redirect(self):
         # One transaction persists both the mode and the recipient queue.
         with self.db:
+            normal = self.get('normal_campaign')
+            if normal:
+                self.db.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (normal,))
             previous = self.get('redirect_campaign')
             if previous:
                 self.db.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (previous,))
@@ -67,22 +71,29 @@ class Storage:
 
     def reverse(self):
         with self.db:
-            campaign = self.get('redirect_campaign')
-            if campaign:
-                self.db.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (campaign,))
-            self.set('mode', 'normal')
+            for key in ('redirect_campaign', 'normal_campaign'):
+                previous = self.get(key)
+                if previous:
+                    self.db.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (previous,))
+            cursor = self.db.execute('INSERT INTO campaigns(text) VALUES (?)', (REVERSE_MESSAGE,))
+            campaign = cursor.lastrowid
+            self.db.execute('INSERT INTO deliveries(campaign,user_id) SELECT ?,id FROM users WHERE active=1', (campaign,))
+            self.db.executemany('INSERT OR REPLACE INTO settings VALUES (?,?)',
+                               [('mode', 'normal'), ('normal_campaign', str(campaign))])
+        return campaign
 
     def started(self, user):
         self.save_user(user)
         with self.db:
             self.db.execute('UPDATE users SET active=1 WHERE id=?', (user.id,))
-        if self.get('mode') == 'redirect':
+        key = 'redirect_campaign' if self.get('mode') == 'redirect' else 'normal_campaign'
+        if self.get(key):
             with self.db:
                 self.db.execute('INSERT OR IGNORE INTO deliveries(campaign,user_id) VALUES (?,?)',
-                                (int(self.get('redirect_campaign')), user.id))
+                                (int(self.get(key)), user.id))
 
     def next_delivery(self):
-        return self.db.execute('''SELECT c.*,d.user_id FROM deliveries d JOIN campaigns c ON c.id=d.campaign
+        return self.db.execute('''SELECT c.*,d.user_id,u.first_name FROM deliveries d JOIN campaigns c ON c.id=d.campaign
         JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND c.cancelled=0 AND u.active=1
         ORDER BY c.id,d.user_id LIMIT 1''').fetchone()
 

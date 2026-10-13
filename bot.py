@@ -1,18 +1,20 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError
-from storage import Storage, DEFAULT_MESSAGE
+from storage import Storage, DEFAULT_MESSAGE, REVERSE_MESSAGE
 
 logging.basicConfig(level=logging.INFO)
 dp = Dispatcher()
 store = None
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 composer = {}
+REVERSE_IMAGE = Path(__file__).resolve().parent / 'assets' / 'drew_fx_bull.png'
 
 
 def panel():
@@ -33,7 +35,7 @@ async def start(message: Message):
     if message.chat.type != 'private' or not message.from_user:
         return
     store.started(message.from_user)
-    if store.get('mode') == 'redirect':
+    if store.get('mode') == 'redirect' or store.get('normal_campaign'):
         await message.answer('Welcome! Your channel message will arrive shortly.')
     else:
         await message.answer(DEFAULT_MESSAGE)
@@ -67,8 +69,8 @@ async def action(message, name):
         await message.answer(f'Redirect enabled. Broadcast #{campaign} queued for saved users; new starters are included.')
     elif name == 'reverse':
         composer.pop(message.chat.id, None)
-        store.reverse()
-        await message.answer('Normal mode restored. Pending redirect deliveries stopped.')
+        campaign = store.reverse()
+        await message.answer(f'Reverse enabled. Personalized DREW FX broadcast #{campaign} queued with the Join Community button. New starters are included.')
     elif name in ('broadcast', 'set_redirect'):
         composer[message.chat.id] = name
         await message.answer('Send the text, photo, video or other single message to use. /cancel to cancel.' +
@@ -140,6 +142,15 @@ async def worker(bot):
         try:
             if row['source_chat'] is not None:
                 await bot.copy_message(row['user_id'], row['source_chat'], row['source_message'])
+            elif row['text'] == REVERSE_MESSAGE:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text='Join DREW FX Community', url='https://t.me/Drewcommunity')]])
+                text = REVERSE_MESSAGE.format(name=row['first_name'] or 'Friend')
+                if REVERSE_IMAGE.is_file():
+                    await bot.send_photo(row['user_id'], FSInputFile(REVERSE_IMAGE), caption=text,
+                                         reply_markup=keyboard)
+                else:
+                    await bot.send_message(row['user_id'], text, reply_markup=keyboard)
             else:
                 await bot.send_message(row['user_id'], row['text'])
         except TelegramRetryAfter as error:
@@ -164,6 +175,8 @@ async def main():
     if not token or ADMIN_ID <= 0:
         raise RuntimeError('Set BOT_TOKEN and ADMIN_ID (your numeric Telegram user ID)')
     store = Storage(os.getenv('DATABASE_PATH', 'data/drewacademy.db'))
+    if not REVERSE_IMAGE.is_file():
+        logging.warning('Upload assets/drew_fx_bull.png to include the reverse broadcast image; sending text until available.')
     bot = Bot(token=token)
     task = asyncio.create_task(worker(bot))
     try:

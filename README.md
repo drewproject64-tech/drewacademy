@@ -16,7 +16,7 @@ Run only one instance per bot token. No admin ID is assumed or hardcoded.
 
 - `/admin`: REDIRECT, REVERSE, Set Redirect Message, Broadcast Message / Offer, Users & Stats.
 - REDIRECT or `/redirect`: enables redirect mode and immediately queues the configured message for all active saved users. New users pressing `/start` receive it too. Each user receives it once per activation; clicking REDIRECT again starts a fresh campaign.
-- REVERSE or `/reverse`: restores the original XAUUSD channel message and cancels pending redirect deliveries. Messages already delivered cannot be recalled. Custom broadcasts continue.
+- REVERSE or `/reverse`: cancels pending redirect deliveries and broadcasts the personalized DREW FX community message to active saved users. New starters also receive it once per activation. Uses `assets/drew_fx_bull.png` with a caption and Join DREW FX Community button pointing to https://t.me/Drewcommunity. Upload that image to include the photo; until then it sends text with the button. Messages already delivered cannot be recalled. Custom broadcasts continue. Switching back to REDIRECT cancels pending reverse deliveries.
 - Set Redirect Message: send one text, photo, video or other copyable message. The bot saves a preview copy as its source. Click REDIRECT to send it. Keep that preview message available.
 - Broadcast Message / Offer: opens a composer; the next single message is previewed and queued for saved users in either mode. Albums are not supported.
 - `/send MESSAGE`: queues a text broadcast in either mode.
