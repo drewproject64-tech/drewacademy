@@ -35,21 +35,27 @@ async def start(message: Message):
     if message.chat.type != 'private' or not message.from_user:
         return
     store.started(message.from_user)
+    if admin(message):
+        await message.answer('Administrator controls', reply_markup=panel())
+        return
     if store.get('mode') == 'redirect' or store.get('normal_campaign'):
         await message.answer('Welcome! Your channel message will arrive shortly.')
     else:
         await message.answer(DEFAULT_MESSAGE)
 
 
-@dp.message(Command('admin', 'redirect', 'reverse', 'send', 'cancel', 'help'))
+@dp.message(Command('admin', 'redirect', 'reverse', 'send', 'cancel', 'help', 'id'))
 async def commands(message: Message):
     command = message.text.split()[0].split('@')[0].lower()
+    if command == '/id':
+        await message.answer(f'Your Telegram user ID: {message.from_user.id}')
+        return
     if command == '/help':
         await message.answer('Use /start to open the bot. /stop opts out of broadcasts.' +
                              ('\n/admin — controls\n/redirect — enable and broadcast\n/reverse — normal mode\n/send MESSAGE — broadcast\n/cancel — close composer' if admin(message) else ''))
         return
     if not admin(message):
-        await message.answer('Administrator only.')
+        await message.answer(f'Administrator only. Your Telegram user ID is {message.from_user.id}. If you own this bot, set ADMIN_ID to this number in Render, then redeploy.')
         return
     if command == '/send':
         text = message.text.partition(' ')[2].strip()
