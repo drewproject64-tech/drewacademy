@@ -14,7 +14,7 @@ dp = Dispatcher()
 store = None
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 composer = {}
-REVERSE_IMAGE = Path(__file__).resolve().parent / 'assets' / 'drew_fx_bull.png'
+REVERSE_IMAGE = Path(__file__).resolve().parent / 'assets' / 'drew_fx_bull.jpg'
 
 
 def panel():
@@ -176,7 +176,7 @@ async def main():
         raise RuntimeError('Set BOT_TOKEN and ADMIN_ID (your numeric Telegram user ID)')
     store = Storage(os.getenv('DATABASE_PATH', 'data/drewacademy.db'))
     if not REVERSE_IMAGE.is_file():
-        logging.warning('Upload assets/drew_fx_bull.png to include the reverse broadcast image; sending text until available.')
+        logging.warning('Upload assets/drew_fx_bull.jpg to include the reverse broadcast image; sending text until available.')
     bot = Bot(token=token)
     task = asyncio.create_task(worker(bot))
     try:
