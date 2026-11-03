@@ -47,3 +47,51 @@ class StorageTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RefinedStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.s = Storage(self.directory.name + '/db')
+
+    def tearDown(self):
+        self.s.close()
+        self.directory.cleanup()
+
+    def test_redirect_is_idempotent_and_reverse_preserves_manual_broadcast(self):
+        self.s.started(user(1))
+        first = self.s.enable_redirect()
+        self.assertEqual(first, self.s.enable_redirect())
+        manual = self.s.campaign('custom')
+        self.s.reverse()
+        self.assertFalse(self.s.deliverable(first, 1))
+        self.assertTrue(self.s.deliverable(manual, 1))
+        self.assertNotEqual(first, self.s.enable_redirect())
+
+    def test_opt_out_not_reactivated_by_arbitrary_message(self):
+        self.s.started(user(1))
+        campaign = self.s.campaign('custom')
+        self.s.deactivate(1)
+        self.s.save_user(user(1))
+        self.assertFalse(self.s.deliverable(campaign, 1))
+        self.assertIn('Inactive users: 1', self.s.stats())
+        self.s.started(user(1))
+        self.assertIn('Active users: 1', self.s.stats())
+
+    def test_broadcast_confirmation_consumed_once_and_excludes_admin(self):
+        import json
+        self.s.started(user(1))
+        self.s.started(user(99))
+        self.s.set('draft', json.dumps({'nonce':'test','text':'hi'}))
+        self.assertIsNone(self.s.confirm_draft('wrong', 99))
+        campaign = self.s.confirm_draft('test', 99)
+        self.assertTrue(self.s.deliverable(campaign, 1))
+        self.assertFalse(self.s.deliverable(campaign, 99))
+        self.assertIsNone(self.s.confirm_draft('test', 99))
+
+    def test_custom_redirect_persists(self):
+        self.s.started(user(1))
+        self.s.set('redirect_chat', 99)
+        self.s.set('redirect_message', 123)
+        self.s.enable_redirect()
+        self.assertEqual(self.s.next_delivery()['source_message'], 123)

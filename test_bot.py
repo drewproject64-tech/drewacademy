@@ -18,10 +18,11 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         bot.store.enable_redirect()
         message.answer.reset_mock()
         await bot.start(message)
-        message.answer.assert_not_awaited()
+        self.assertIn('queued', message.answer.await_args.args[0])
         self.assertEqual(bot.store.next_delivery()['text'], bot.REVERSE_MESSAGE)
         bot.store.reverse()
         self.assertIsNone(bot.store.next_delivery())
+        message.answer.reset_mock()
         await bot.start(message)
         message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
 
@@ -57,7 +58,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         bot.store.campaign('Offer')
         telegram = SimpleNamespace(send_message=AsyncMock(), copy_message=AsyncMock())
         task = asyncio.create_task(bot.worker(telegram))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.12)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         telegram.send_message.assert_awaited_once_with(1, 'Offer')
@@ -73,7 +74,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         campaign = bot.store.enable_redirect()
         telegram = SimpleNamespace(send_message=AsyncMock(), copy_message=AsyncMock())
         task = asyncio.create_task(bot.worker(telegram))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.12)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         call = telegram.send_message.await_args
@@ -89,10 +90,11 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         telegram = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
         with patch.object(bot.Path, 'is_file', return_value=True):
             task = asyncio.create_task(bot.worker(telegram))
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.12)
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         call = telegram.send_photo.await_args
         self.assertTrue(call.kwargs['caption'].startswith('Test, DON’T MISS OUT AGAIN!'))
         self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/Drewcommunity')
         telegram.send_message.assert_not_awaited()
+
