@@ -236,7 +236,12 @@ async def worker(bot):
 async def acquire_worker_lease(database_url, stop_event):
     """Use a separate PostgreSQL session to serialize Render rollouts."""
     import psycopg
-    conn = await psycopg.AsyncConnection.connect(database_url, autocommit=True, sslmode='require', connect_timeout=15)
+    from psycopg.conninfo import conninfo_to_dict
+    connection = conninfo_to_dict(database_url)
+    # Neon transaction pooling cannot retain session advisory locks.
+    connection['host'] = connection.get('host', '').replace('-pooler.', '.')
+    connection.update(sslmode='require', connect_timeout='15')
+    conn = await psycopg.AsyncConnection.connect(**connection, autocommit=True)
     try:
         while not stop_event.is_set():
             cursor = await conn.execute('SELECT pg_try_advisory_lock(8860598557)')
