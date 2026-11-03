@@ -95,3 +95,20 @@ class RefinedStorageTests(unittest.TestCase):
         self.s.set('redirect_message', 123)
         self.s.enable_redirect()
         self.assertEqual(self.s.next_delivery()['source_message'], 123)
+
+class DuplicateProtectionTests(unittest.TestCase):
+    def test_replayed_updates_and_rapid_starts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            s = Storage(directory + '/db')
+            self.assertTrue(s.claim_update(100))
+            self.assertFalse(s.claim_update(100))
+            self.assertTrue(s.claim_start(1, now=100))
+            self.assertFalse(s.claim_start(1, now=100.5))
+            self.assertTrue(s.claim_start(1, now=104))
+            s.enable_redirect()
+            self.assertTrue(s.claim_start(1, now=104.5))
+            s.close()
+            s = Storage(directory + '/db')
+            self.assertFalse(s.claim_update(100))
+            self.assertFalse(s.claim_start(1, now=105))
+            s.close()

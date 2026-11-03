@@ -22,7 +22,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             await bot.start(message)
             await bot.start(message)
         message.answer.assert_not_awaited()
-        self.assertEqual(telegram.send_message.await_count, 2)
+        self.assertEqual(telegram.send_message.await_count, 1)
         self.assertIsNone(bot.store.next_delivery())
         bot.store.reverse()
         await bot.start(message)
@@ -144,5 +144,6 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(call.kwargs['caption'].startswith('Test, DON’T MISS OUT AGAIN!'))
         self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/DrewFXHub')
         telegram.send_message.assert_not_awaited()
+
 
 

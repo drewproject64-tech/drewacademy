@@ -31,6 +31,18 @@ async def dbcall(method, *args):
     return await asyncio.to_thread(run)
 
 
+class DeduplicateUpdates(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if not await dbcall('claim_update', event.update_id):
+            logging.info('Ignored replayed Telegram update %s', event.update_id)
+            return
+        try:
+            return await handler(event, data)
+        except Exception:
+            await dbcall('release_update', event.update_id)
+            raise
+
+
 class TrackUsers(BaseMiddleware):
     async def __call__(self, handler, event, data):
         user = getattr(event, 'from_user', None)
@@ -70,6 +82,9 @@ async def start(message: Message):
         return
     composer.pop(message.chat.id, None)
     async with delivery_lock(message.from_user.id):
+        if not await dbcall('claim_start', message.from_user.id):
+            logging.info('Ignored rapid repeated start request')
+            return
         row = await dbcall('start_payload', message.from_user)
         if row:
             await send_payload(message.bot, row)
@@ -279,6 +294,7 @@ async def main():
         raise RuntimeError('Set DATABASE_URL to the Neon PostgreSQL connection string')
     store = await asyncio.to_thread(Storage, database_url)
     logging.info('Neon database initialized; user registry and queue ready.')
+    dp.update.outer_middleware(DeduplicateUpdates())
     dp.message.outer_middleware(TrackUsers())
     dp.callback_query.outer_middleware(TrackUsers())
     if not REVERSE_IMAGE.is_file():
@@ -319,5 +335,6 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 
 

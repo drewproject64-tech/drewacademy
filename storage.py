@@ -16,6 +16,7 @@ def schema(postgres=False):
         id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT,
         language_code TEXT, first_seen TEXT, last_seen TEXT, active INTEGER DEFAULT 1)''',
         'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)',
+        'CREATE TABLE IF NOT EXISTS handled_updates (id BIGINT PRIMARY KEY, seen_at BIGINT)',
         f'''CREATE TABLE IF NOT EXISTS campaigns (id {identity}, text TEXT,
         source_chat BIGINT, source_message BIGINT, cancelled INTEGER DEFAULT 0)''',
         '''CREATE TABLE IF NOT EXISTS deliveries (campaign BIGINT, user_id BIGINT,
@@ -127,6 +128,29 @@ class Storage:
             if self.get('mode') == 'redirect' and self.get('redirect_campaign'):
                 self.execute('INSERT INTO deliveries(campaign,user_id) VALUES (?,?) ON CONFLICT(campaign,user_id) DO NOTHING', (int(self.get('redirect_campaign')), user.id))
 
+    def claim_update(self, update_id):
+        import time
+        with self.transaction():
+            row = self.execute('INSERT INTO handled_updates(id,seen_at) VALUES (?,?) ON CONFLICT(id) DO NOTHING RETURNING id', (update_id, int(time.time()))).fetchone()
+            return row is not None
+
+    def release_update(self, update_id):
+        with self.transaction():
+            self.execute('DELETE FROM handled_updates WHERE id=?', (update_id,))
+
+    def claim_start(self, user_id, now=None):
+        import time
+        now = time.time() if now is None else now
+        with self.transaction():
+            # A real mode change remains immediately testable by the admin.
+            signature = self.get('mode', 'normal') + ':' + self.get('redirect_campaign')
+            key = f'last_start:{user_id}:{signature}'
+            previous = self.get(key)
+            if previous and now - float(previous) < 3:
+                return False
+            self.set(key, now)
+            return True
+
     def start_payload(self, user):
         """A /start response owns its delivery; never enqueue another copy."""
         with self.transaction():
@@ -205,4 +229,5 @@ class Storage:
 
     def close(self):
         self.db.close()
+
 
