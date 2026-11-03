@@ -190,7 +190,7 @@ async def send_payload(bot, row):
         await bot.copy_message(row['user_id'], row['source_chat'], row['source_message'])
     elif row['text'] == REVERSE_MESSAGE:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text='Join DREW FX Community', url='https://t.me/Drewcommunity')]])
+            text='Join DREW FX Community', url='https://t.me/DrewFXHub')]])
         text = REVERSE_MESSAGE.format(name=row['first_name'] or 'Friend')
         if REVERSE_IMAGE.is_file():
             await bot.send_photo(row['user_id'], FSInputFile(REVERSE_IMAGE), caption=text, reply_markup=keyboard)

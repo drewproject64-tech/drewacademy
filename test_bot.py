@@ -126,7 +126,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(task, return_exceptions=True)
         call = telegram.send_message.await_args
         self.assertTrue(call.args[1].startswith('Test, DON’T MISS OUT AGAIN! 🔥'))
-        self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/Drewcommunity')
+        self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/DrewFXHub')
         bot.store.started(user(2))
         self.assertEqual(bot.store.next_delivery()['id'], campaign)
         self.assertEqual(bot.store.next_delivery()['user_id'], 2)
@@ -142,7 +142,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
         call = telegram.send_photo.await_args
         self.assertTrue(call.kwargs['caption'].startswith('Test, DON’T MISS OUT AGAIN!'))
-        self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/Drewcommunity')
+        self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/DrewFXHub')
         telegram.send_message.assert_not_awaited()
 
 
