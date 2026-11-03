@@ -53,6 +53,23 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('reverse', buttons)
         self.assertIn('redirect', buttons)
 
+    async def test_nonadmin_cannot_use_stats_or_send_buttons(self):
+        for button in ('stats', 'confirm_redirect', 'send_draft:fake'):
+            query = SimpleNamespace(from_user=user(1), data=button,
+                message=SimpleNamespace(chat=SimpleNamespace(type='private', id=1), answer=AsyncMock()), answer=AsyncMock())
+            await bot.callback(query)
+            query.answer.assert_awaited_once_with('Administrator only.', show_alert=True)
+            query.message.answer.assert_not_awaited()
+        self.assertEqual(bot.store.get('mode', 'normal'), 'normal')
+
+    async def test_custom_send_requires_confirmation(self):
+        message = SimpleNamespace(text='/send Hello subscribers', chat=SimpleNamespace(type='private', id=99),
+                                  from_user=user(99), answer=AsyncMock())
+        await bot.commands(message)
+        self.assertIsNone(bot.store.next_delivery())
+        self.assertIn('Send broadcast', str(message.answer.await_args.kwargs['reply_markup']))
+        self.assertIn('Hello subscribers', bot.store.get('draft'))
+
     async def test_worker_sends_saved_campaign(self):
         bot.store.started(user(1))
         bot.store.campaign('Offer')
