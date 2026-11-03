@@ -16,6 +16,11 @@ dp = Dispatcher()
 store = None
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 composer = {}
+user_locks = {}
+
+
+def delivery_lock(user_id):
+    return user_locks.setdefault(user_id, asyncio.Lock())
 REVERSE_IMAGE = Path(__file__).resolve().parent / 'assets' / 'drew_fx_bull.png'
 
 
@@ -58,12 +63,13 @@ def admin(message):
 async def start(message: Message):
     if message.chat.type != 'private' or not message.from_user:
         return
-    await dbcall('started', message.from_user)
-    if await dbcall('get', 'mode') == 'redirect':
-        await message.answer('Welcome to Drew FX. The community message is queued. /stop stops broadcasts.')
-        return  # The persistent queue sends the image and caption.
-    else:
-        await message.answer(DEFAULT_MESSAGE)
+    composer.pop(message.chat.id, None)
+    async with delivery_lock(message.from_user.id):
+        row = await dbcall('start_payload', message.from_user)
+        if row:
+            await send_payload(message.bot, row)
+        else:
+            await message.answer(DEFAULT_MESSAGE)
 
 
 @dp.message(Command('admin', 'redirect', 'reverse', 'send', 'cancel', 'help', 'id'))
@@ -179,54 +185,79 @@ async def draft(message, text=None, source_chat=None, source_message=None):
                          reply_markup=confirmation('send_draft:' + nonce, 'Send broadcast'))
 
 
+async def send_payload(bot, row):
+    if row['source_chat'] is not None:
+        await bot.copy_message(row['user_id'], row['source_chat'], row['source_message'])
+    elif row['text'] == REVERSE_MESSAGE:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text='Join DREW FX Community', url='https://t.me/Drewcommunity')]])
+        text = REVERSE_MESSAGE.format(name=row['first_name'] or 'Friend')
+        if REVERSE_IMAGE.is_file():
+            await bot.send_photo(row['user_id'], FSInputFile(REVERSE_IMAGE), caption=text, reply_markup=keyboard)
+        else:
+            await bot.send_message(row['user_id'], text, reply_markup=keyboard)
+    else:
+        await bot.send_message(row['user_id'], row['text'])
+
+
 async def worker(bot):
     while True:
         try:
             row = await dbcall('next_delivery')
-        except Exception:
-            logging.warning('Database temporarily unavailable; delivery queue will retry.')
-            await asyncio.sleep(5)
-            continue
-        if not row:
-            await asyncio.sleep(1)
-            continue
-        try:
-            if not await dbcall('deliverable', row['id'], row['user_id']):
+            if not row:
+                await asyncio.sleep(1)
                 continue
-            if row['source_chat'] is not None:
-                await bot.copy_message(row['user_id'], row['source_chat'], row['source_message'])
-            elif row['text'] == REVERSE_MESSAGE:
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                    text='Join DREW FX Community', url='https://t.me/Drewcommunity')]])
-                text = REVERSE_MESSAGE.format(name=row['first_name'] or 'Friend')
-                if REVERSE_IMAGE.is_file():
-                    await bot.send_photo(row['user_id'], FSInputFile(REVERSE_IMAGE), caption=text,
-                                         reply_markup=keyboard)
+            async with delivery_lock(row['user_id']):
+                if not await dbcall('claim_delivery', row['id'], row['user_id']):
+                    continue
+                try:
+                    await send_payload(bot, row)
+                except TelegramRetryAfter as error:
+                    await dbcall('finish', row['id'], row['user_id'], 'pending')
+                    await asyncio.sleep(error.retry_after + 1)
+                except TelegramForbiddenError:
+                    await dbcall('finish', row['id'], row['user_id'], 'blocked')
+                except TelegramBadRequest:
+                    logging.warning('Permanent delivery failure for campaign %s', row['id'])
+                    await dbcall('finish', row['id'], row['user_id'], 'failed')
+                except (TelegramNetworkError, OSError):
+                    await dbcall('finish', row['id'], row['user_id'], 'pending')
+                    await asyncio.sleep(5)
                 else:
-                    await bot.send_message(row['user_id'], text, reply_markup=keyboard)
-            else:
-                await bot.send_message(row['user_id'], row['text'])
-        except TelegramRetryAfter as error:
-            await asyncio.sleep(error.retry_after + 1)
-            continue
-        except TelegramForbiddenError:
-            await dbcall('finish', row['id'], row['user_id'], 'blocked')
-        except TelegramBadRequest:
-            logging.warning('Permanent delivery failure for campaign %s', row['id'])
-            await dbcall('finish', row['id'], row['user_id'], 'failed')
-        except (TelegramNetworkError, OSError):
-            await asyncio.sleep(5)
-            continue
+                    await dbcall('finish', row['id'], row['user_id'], 'sent')
+            await asyncio.sleep(0.1)
         except Exception:
-            logging.warning('Delivery failed temporarily; retrying queue after a delay.')
+            # An uncertain send/commit remains 'sending' for restart recovery,
+            # rather than repeatedly sending the same post in a tight loop.
+            logging.exception('Delivery worker error')
             await asyncio.sleep(5)
-        else:
+
+
+async def acquire_worker_lease(database_url, stop_event):
+    """Use a separate PostgreSQL session to serialize Render rollouts."""
+    import psycopg
+    conn = await psycopg.AsyncConnection.connect(database_url, autocommit=True, sslmode='require', connect_timeout=15)
+    try:
+        while not stop_event.is_set():
+            cursor = await conn.execute('SELECT pg_try_advisory_lock(8860598557)')
+            if (await cursor.fetchone())[0]:
+                logging.info('Exclusive bot worker lease acquired.')
+                return conn
             try:
-                await dbcall('finish', row['id'], row['user_id'], 'sent')
-            except Exception:
-                logging.warning('Delivery not recorded; queue will retry.')
-                await asyncio.sleep(5)
-        await asyncio.sleep(0.1)
+                await asyncio.wait_for(stop_event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+        raise asyncio.CancelledError
+    except BaseException:
+        await conn.close()
+        raise
+
+
+async def watch_lease(conn):
+    # Exit on a lost lease instead of allowing two independent pollers.
+    while True:
+        await asyncio.sleep(5)
+        await conn.execute('SELECT 1')
 
 
 async def main():
@@ -252,16 +283,32 @@ async def main():
                                BotCommand(command='cancel', description='Cancel composer')], scope=BotCommandScopeChat(chat_id=ADMIN_ID))
     await bot.set_chat_menu_button(chat_id=ADMIN_ID, menu_button=MenuButtonCommands())
     logging.info('Admin-only command menu configured.')
+    import signal
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop_event.set)
+    lease = await acquire_worker_lease(database_url, stop_event)
+    await dbcall('recover_deliveries')
     task = asyncio.create_task(worker(bot))
+    polling = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+    shutdown = asyncio.create_task(stop_event.wait())
+    heartbeat = asyncio.create_task(watch_lease(lease))
     try:
-        await dp.start_polling(bot)
+        done, _ = await asyncio.wait([polling, shutdown, heartbeat], return_when=asyncio.FIRST_COMPLETED)
+        for finished in done:
+            if finished is not shutdown:
+                finished.result()
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        for running in (task, polling, shutdown, heartbeat):
+            running.cancel()
+        await asyncio.gather(task, polling, shutdown, heartbeat, return_exceptions=True)
+        await lease.close()
         await asyncio.to_thread(store.close)
         await bot.session.close()
 
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 

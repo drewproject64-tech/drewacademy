@@ -127,6 +127,36 @@ class Storage:
             if self.get('mode') == 'redirect' and self.get('redirect_campaign'):
                 self.execute('INSERT INTO deliveries(campaign,user_id) VALUES (?,?) ON CONFLICT(campaign,user_id) DO NOTHING', (int(self.get('redirect_campaign')), user.id))
 
+    def start_payload(self, user):
+        """A /start response owns its delivery; never enqueue another copy."""
+        with self.transaction():
+            self.save_user(user)
+            self.execute('UPDATE users SET active=1 WHERE id=?', (user.id,))
+            if self.get('mode') != 'redirect':
+                return None
+            campaign = self.get('redirect_campaign')
+            row = self.execute('SELECT * FROM campaigns WHERE id=? AND cancelled=0', (int(campaign),)).fetchone() if campaign else None
+            if not row:
+                return None
+            self.execute("UPDATE deliveries SET status='superseded' WHERE campaign=? AND user_id=? AND status='pending'", (int(campaign), user.id))
+            payload = dict(row)
+            payload.update(user_id=user.id, first_name=user.first_name)
+            return payload
+
+    def claim_delivery(self, campaign, user):
+        with self.transaction():
+            row = self.execute("""UPDATE deliveries SET status='sending'
+                WHERE campaign=? AND user_id=? AND status='pending'
+                AND EXISTS (SELECT 1 FROM campaigns WHERE id=? AND cancelled=0)
+                AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1)
+                RETURNING user_id""", (campaign,user,campaign,user)).fetchone()
+            return row is not None
+
+    def recover_deliveries(self):
+        # Only run after obtaining the process lease, with no other worker live.
+        with self.transaction():
+            self.execute("UPDATE deliveries SET status='pending' WHERE status='sending'")
+
     def deactivate(self, user_id):
         with self.transaction():
             self.execute('UPDATE users SET active=0 WHERE id=?', (user_id,))
@@ -175,3 +205,4 @@ class Storage:
 
     def close(self):
         self.db.close()
+
