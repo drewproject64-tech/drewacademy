@@ -147,3 +147,21 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+
+class AdminPanelReuseTests(BotTests):
+    async def test_repeated_admin_reuses_one_panel(self):
+        message = SimpleNamespace(text='/admin', chat=SimpleNamespace(type='private', id=99),
+            from_user=user(99), answer=AsyncMock(return_value=SimpleNamespace(message_id=456)),
+            bot=SimpleNamespace(edit_message_text=AsyncMock()))
+        await bot.commands(message)
+        await bot.commands(message)
+        message.answer.assert_awaited_once()
+        message.bot.edit_message_text.assert_awaited_once()
+        self.assertEqual(message.bot.edit_message_text.await_args.kwargs['message_id'], 456)
+
+    async def test_repeated_callback_edits_existing_panel(self):
+        message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
+            edit_text=AsyncMock(), answer=AsyncMock())
+        await bot.action(message, 'redirect', edit=True)
+        message.edit_text.assert_awaited_once()
+        message.answer.assert_not_awaited()

@@ -115,26 +115,56 @@ async def commands(message: Message):
         await action(message, command[1:])
 
 
-async def action(message, name):
+async def show_admin_panel(message):
+    # Reuse one persisted control message even if /admin arrives twice.
+    async with delivery_lock(ADMIN_ID):
+        saved = await dbcall('get', 'admin_panel_message')
+        if saved:
+            try:
+                await message.bot.edit_message_text(chat_id=message.chat.id, message_id=int(saved),
+                    text='Administrator controls', reply_markup=panel())
+                return
+            except TelegramBadRequest as error:
+                if 'message is not modified' in str(error).lower():
+                    return
+                if not any(reason in str(error).lower() for reason in ('message to edit not found', "message can't be edited", 'message identifier')):
+                    raise
+        sent = await message.answer('Administrator controls', reply_markup=panel())
+        await dbcall('set', 'admin_panel_message', sent.message_id)
+
+
+async def admin_response(message, text, edit=False, **kwargs):
+    if not edit:
+        return await message.answer(text, **kwargs)
+    try:
+        return await message.edit_text(text, **kwargs)
+    except TelegramBadRequest as error:
+        if 'message is not modified' not in str(error).lower():
+            raise
+
+
+async def action(message, name, edit=False):
     if name == 'redirect':
         composer.pop(message.chat.id, None)
-        await message.answer('Enable redirect and send the saved community message to active users? Repeated activation while enabled will not resend.', reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
+        await admin_response(message, 'Enable redirect and send the saved community message to active users? Repeated activation while enabled will not resend.', edit=edit, reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
     elif name == 'reverse':
         composer.pop(message.chat.id, None)
         await dbcall('reverse')
-        await message.answer('Normal mode restored. New /start requests receive the original XAUUSD message. Pending redirect deliveries stopped.')
+        await admin_response(message, 'Normal mode restored. New /start requests receive the original XAUUSD message. Pending redirect deliveries stopped.', edit=edit)
     elif name in ('broadcast', 'set_redirect'):
         composer[message.chat.id] = name
-        await message.answer('Send the text, photo, video or other single message to use. /cancel to cancel.' +
-                             (' It will be broadcast to saved users.' if name == 'broadcast' else ' It will be saved; click REDIRECT to send it.'))
+        await admin_response(message, 'Send the text, photo, video or other single message to use. /cancel to cancel.' +
+                             (' It will be broadcast to saved users.' if name == 'broadcast' else ' It will be saved; click REDIRECT to send it.'), edit=edit)
     elif name == 'stats':
-        await message.answer(await dbcall('stats'), reply_markup=panel())
+        await admin_response(message, await dbcall('stats'), edit=edit, reply_markup=panel())
     elif name == 'cancel':
         composer.pop(message.chat.id, None)
         await dbcall('set', 'draft', '')
-        await message.answer('Composer cancelled.', reply_markup=panel())
+        await admin_response(message, 'Composer cancelled.', edit=edit, reply_markup=panel())
+    elif name == 'admin':
+        await show_admin_panel(message)
     else:
-        await message.answer('Administrator controls', reply_markup=panel())
+        logging.info('Ignored unknown admin action')
 
 
 @dp.callback_query()
@@ -145,15 +175,15 @@ async def callback(query: CallbackQuery):
     await query.answer()
     if query.data == 'confirm_redirect':
         campaign = await dbcall('enable_redirect', ADMIN_ID)
-        await query.message.answer(f'Redirect enabled. Campaign #{campaign}.', reply_markup=panel())
+        await admin_response(query.message, f'Redirect enabled. Campaign #{campaign}.', edit=True, reply_markup=panel())
     elif query.data and query.data.startswith('send_draft:'):
         campaign = await dbcall('confirm_draft', query.data.split(':', 1)[1], ADMIN_ID)
         if campaign is None:
             await query.message.answer('This preview has expired. Compose a new message.')
             return
-        await query.message.answer(f'Broadcast #{campaign} queued.', reply_markup=panel())
+        await admin_response(query.message, f'Broadcast #{campaign} queued.', edit=True, reply_markup=panel())
     else:
-        await action(query.message, query.data)
+        await action(query.message, query.data, edit=True)
 
 
 @dp.message(Command('stop'))
