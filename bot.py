@@ -46,6 +46,11 @@ def confirmation(action, label='Confirm'):
         InlineKeyboardButton(text='Cancel', callback_data='cancel')]])
 
 
+def community_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text='Join DREW FX Community', url='https://t.me/DrewFXHub')]])
+
+
 def panel():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='REDIRECT', callback_data='redirect'), InlineKeyboardButton(text='REVERSE', callback_data='reverse')],
@@ -69,7 +74,7 @@ async def start(message: Message):
         if row:
             await send_payload(message.bot, row)
         else:
-            await message.answer(DEFAULT_MESSAGE)
+            await message.answer(DEFAULT_MESSAGE, reply_markup=community_keyboard())
 
 
 @dp.message(Command('admin', 'redirect', 'reverse', 'send', 'cancel', 'help', 'id'))
@@ -189,8 +194,7 @@ async def send_payload(bot, row):
     if row['source_chat'] is not None:
         await bot.copy_message(row['user_id'], row['source_chat'], row['source_message'])
     elif row['text'] == REVERSE_MESSAGE:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text='Join DREW FX Community', url='https://t.me/DrewFXHub')]])
+        keyboard = community_keyboard()
         text = REVERSE_MESSAGE.format(name=row['first_name'] or 'Friend')
         if REVERSE_IMAGE.is_file():
             await bot.send_photo(row['user_id'], FSInputFile(REVERSE_IMAGE), caption=text, reply_markup=keyboard)

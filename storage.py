@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from threading import RLock
 
-DEFAULT_MESSAGE = 'Get XAUUSD Daily 5-8 Free Signals Free Available Join Now 👊👇👇👇👇https://t.me/Drewcommunity'
+DEFAULT_MESSAGE = 'Get XAUUSD Daily 5-8 Free Signals Free Available Join Now 👊👇👇👇👇'
 REVERSE_MESSAGE = '{name}, DON’T MISS OUT AGAIN! 🔥\n\nThe DREW FX community is active with exclusive signals, and the session is still ongoing. Join now and stay up to date with everything!'
 
 

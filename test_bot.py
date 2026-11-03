@@ -15,7 +15,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=1),
                                   from_user=user(1), answer=AsyncMock(), bot=telegram)
         await bot.start(message)
-        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
+        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE, reply_markup=bot.community_keyboard())
         bot.store.enable_redirect()
         message.answer.reset_mock()
         with patch.object(bot.Path, 'is_file', return_value=False):
@@ -26,7 +26,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(bot.store.next_delivery())
         bot.store.reverse()
         await bot.start(message)
-        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
+        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE, reply_markup=bot.community_keyboard())
 
     async def test_two_workers_send_one_queued_post(self):
         bot.store.started(user(1))
@@ -73,7 +73,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
                                   from_user=user(99), answer=AsyncMock())
         await bot.start(message)
-        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
+        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE, reply_markup=bot.community_keyboard())
 
     async def test_admin_command_still_opens_panel(self):
         message = SimpleNamespace(text='/admin', chat=SimpleNamespace(type='private', id=99),
