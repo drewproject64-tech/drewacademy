@@ -43,15 +43,19 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.store.get('mode', 'normal'), 'normal')
         self.assertIn('Administrator only.', message.answer.await_args.args[0])
 
-    async def test_admin_start_shows_panel(self):
+    async def test_admin_start_uses_normal_bot_response(self):
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
                                   from_user=user(99), answer=AsyncMock())
         await bot.start(message)
-        call = message.answer.await_args
-        self.assertEqual(call.args[0], 'Administrator controls')
-        buttons = [button.callback_data for row in call.kwargs['reply_markup'].inline_keyboard for button in row]
-        self.assertIn('reverse', buttons)
-        self.assertIn('redirect', buttons)
+        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE)
+
+    async def test_admin_command_still_opens_panel(self):
+        message = SimpleNamespace(text='/admin', chat=SimpleNamespace(type='private', id=99),
+                                  from_user=user(99), answer=AsyncMock())
+        await bot.commands(message)
+        self.assertEqual(message.answer.await_args.args[0], 'Administrator controls')
+        buttons = [button.callback_data for row in message.answer.await_args.kwargs['reply_markup'].inline_keyboard for button in row]
+        self.assertIn('stats', buttons)
 
     async def test_nonadmin_cannot_use_stats_or_send_buttons(self):
         for button in ('stats', 'confirm_redirect', 'send_draft:fake'):

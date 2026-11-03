@@ -58,10 +58,6 @@ def admin(message):
 async def start(message: Message):
     if message.chat.type != 'private' or not message.from_user:
         return
-    if admin(message):
-        await dbcall('save_user', message.from_user)
-        await message.answer('Administrator controls', reply_markup=panel())
-        return
     await dbcall('started', message.from_user)
     if await dbcall('get', 'mode') == 'redirect':
         await message.answer('Welcome to Drew FX. The community message is queued. /stop stops broadcasts.')
