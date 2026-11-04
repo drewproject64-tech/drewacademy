@@ -298,8 +298,14 @@ class Storage:
                 THEN 'cancelled' ELSE d.status END AS status,COUNT(*) AS n FROM deliveries d
                 JOIN campaigns c ON c.id=d.campaign GROUP BY 1''').fetchall()}
             today = self.execute('SELECT COUNT(*) AS n FROM users WHERE first_seen>=?', (datetime.now(timezone.utc).date().isoformat(),)).fetchone()['n']
+            rotation_id = self.get('rotation_campaign')
+            rotations = 0
+            if self.get('mode') == 'redirect' and rotation_id:
+                rotations = self.execute("""SELECT COUNT(*) AS n FROM rotations WHERE campaign=?
+                    AND status IN ('pending','sending')""", (int(rotation_id),)).fetchone()['n']
             return (f"Total users: {row['total']}\nActive users: {row['active']}\nInactive users: {row['total']-row['active']}"
-                    f"\nNew today (UTC): {today}\nMode: {self.get('mode','normal')}\n"
+                    f"\nNew today (UTC): {today}\nMode: {self.get('mode','normal')}"
+                    f"\nRotation subscribers: {rotations}\nRotation interval: 2 hours\n"
                     + '\n'.join(f'{k.title()}: {counts.get(k,0)}' for k in ('pending','sent','blocked','failed','cancelled')))
 
     def confirm_draft(self, nonce, exclude_id):
