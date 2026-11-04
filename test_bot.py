@@ -135,6 +135,42 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.store.next_rotation()['campaign'], campaign)
         self.assertEqual(bot.store.next_rotation()['user_id'], 2)
 
+    async def test_photo_rotation_uses_uploaded_images_and_english_captions(self):
+        from pathlib import Path
+        from rotation import TESTIMONIAL_IMAGES, MESSAGES, ADMIN_URL
+        telegram = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
+        for step in (1, 2, 3):
+            with self.subTest(step=step):
+                telegram.send_photo.reset_mock()
+                telegram.send_message.reset_mock()
+                await bot.send_rotation_payload(telegram, {'user_id': 123, 'step': step})
+                telegram.send_photo.assert_awaited_once()
+                telegram.send_message.assert_not_awaited()
+                kwargs = telegram.send_photo.await_args.kwargs
+                self.assertEqual(kwargs['chat_id'], 123)
+                self.assertEqual(Path(kwargs['photo'].path).name, TESTIMONIAL_IMAGES[step])
+                self.assertEqual(kwargs['caption'], MESSAGES[step][0])
+                self.assertIn('verified', kwargs['caption'].lower())
+                self.assertEqual(kwargs['reply_markup'].inline_keyboard[0][0].url, ADMIN_URL)
+
+    async def test_missing_testimonial_photo_uses_english_caption_fallback(self):
+        from rotation import MESSAGES
+        telegram = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
+        with patch.object(bot.Path, 'is_file', return_value=False):
+            await bot.send_rotation_payload(telegram, {'user_id': 123, 'step': 2})
+        telegram.send_photo.assert_not_awaited()
+        telegram.send_message.assert_awaited_once()
+        self.assertEqual(telegram.send_message.await_args.args[1], MESSAGES[2][0])
+
+    async def test_final_offer_is_text_with_admin_button(self):
+        from rotation import ADMIN_URL, MESSAGES
+        telegram = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
+        await bot.send_rotation_payload(telegram, {'user_id': 123, 'step': 4})
+        telegram.send_photo.assert_not_awaited()
+        telegram.send_message.assert_awaited_once()
+        self.assertEqual(telegram.send_message.await_args.args[1], MESSAGES[4][0])
+        self.assertEqual(telegram.send_message.await_args.kwargs['reply_markup'].inline_keyboard[0][0].url, ADMIN_URL)
+
     async def test_custom_redirect_intro_is_used_instead_of_default_intro(self):
         bot.store.started(user(1))
         bot.store.set('redirect_chat', 99)
