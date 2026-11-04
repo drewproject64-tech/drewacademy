@@ -10,7 +10,7 @@ from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, Teleg
 from aiogram import BaseMiddleware
 from uuid import uuid4
 from storage import Storage, DEFAULT_MESSAGE, REVERSE_MESSAGE
-from rotation import MESSAGES, ROTATION_INTERVAL_SECONDS
+from rotation import MESSAGES, ROTATION_INTERVAL_SECONDS, TESTIMONIAL_IMAGES
 
 logging.basicConfig(level=logging.INFO)
 dp = Dispatcher()
@@ -284,6 +284,20 @@ async def send_rotation_payload(bot, row):
             except TelegramBadRequest:
                 # The old source message may have been deleted by the admin.
                 logging.warning('Custom first post unavailable; sending built-in introduction.')
+    if step in TESTIMONIAL_IMAGES:
+        # The original screenshots are stored in GitHub under assets/ and are
+        # shipped with the bot. Send a single Telegram photo + English caption,
+        # rather than separate photo and text messages.
+        photo_path = Path(__file__).resolve().parent / 'assets' / TESTIMONIAL_IMAGES[step]
+        if photo_path.is_file():
+            await bot.send_photo(
+                chat_id=row['user_id'],
+                photo=FSInputFile(photo_path),
+                caption=text,
+                reply_markup=rotation_keyboard(step),
+            )
+            return
+        logging.error('Testimonial image not found: %s; sending caption alone', photo_path)
     await bot.send_message(row['user_id'], text, reply_markup=rotation_keyboard(step))
 
 
@@ -405,6 +419,10 @@ async def main():
     dp.callback_query.outer_middleware(TrackUsers())
     if not REVERSE_IMAGE.is_file():
         logging.warning('Upload assets/drew_fx_bull.png to include the reverse broadcast image; sending text until available.')
+    for step, filename in TESTIMONIAL_IMAGES.items():
+        path = Path(__file__).resolve().parent / 'assets' / filename
+        if not path.is_file():
+            logging.error('Rotation step %s will use text fallback: missing %s', step, path)
     bot = Bot(token=token)
     await bot.set_my_commands([BotCommand(command='start', description='Open Drew FX'),
                                BotCommand(command='help', description='Help'),
