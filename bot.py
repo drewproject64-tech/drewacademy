@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, Teleg
 from aiogram import BaseMiddleware
 from uuid import uuid4
 from storage import Storage, DEFAULT_MESSAGE, REVERSE_MESSAGE
+from rotation import MESSAGES, ROTATION_INTERVAL_SECONDS
 
 logging.basicConfig(level=logging.INFO)
 dp = Dispatcher()
@@ -63,6 +64,13 @@ def community_keyboard():
         text='Join DREW FX Community', url='https://t.me/DrewFXHub')]])
 
 
+def rotation_keyboard(index):
+    _, label, url = MESSAGES[index]
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=label, url=url)
+    ]])
+
+
 def panel():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='REDIRECT', callback_data='redirect'), InlineKeyboardButton(text='REVERSE', callback_data='reverse')],
@@ -85,9 +93,15 @@ async def start(message: Message):
         if not await dbcall('claim_start', message.from_user.id):
             logging.info('Ignored rapid repeated start request')
             return
-        row = await dbcall('start_payload', message.from_user)
-        if row:
-            await send_payload(message.bot, row)
+        await dbcall('started', message.from_user, ADMIN_ID)
+        if await dbcall('get', 'mode', 'normal') == 'redirect':
+            # The rotation worker sends the first post once. Do not send a
+            # second copy of that post in the /start handler.
+            await message.answer(
+                '📈 DREW FX updates are active. Market insights and English '
+                'community-message translations arrive every two hours. '
+                'Tap below to explore, or use /stop to opt out.',
+                reply_markup=community_keyboard())
         else:
             await message.answer(DEFAULT_MESSAGE, reply_markup=community_keyboard())
 
@@ -146,15 +160,15 @@ async def admin_response(message, text, edit=False, **kwargs):
 async def action(message, name, edit=False):
     if name == 'redirect':
         composer.pop(message.chat.id, None)
-        await admin_response(message, 'Enable redirect and send the saved community message to active users? Repeated activation while enabled will not resend.', edit=edit, reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
+        await admin_response(message, 'Enable the DREW FX five-message rotation for saved active users? The first post sends now; later posts are spaced two hours apart. After the final admin offer, the cycle repeats until REVERSE. Repeated activation will not restart it.', edit=edit, reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
     elif name == 'reverse':
         composer.pop(message.chat.id, None)
         await dbcall('reverse')
-        await admin_response(message, 'Normal mode restored. New /start requests receive the original XAUUSD message. Pending redirect deliveries stopped.', edit=edit)
+        await admin_response(message, 'Normal mode restored. The two-hour forex rotation is stopped; previously sent posts remain. Manual broadcasts are unaffected.', edit=edit)
     elif name in ('broadcast', 'set_redirect'):
         composer[message.chat.id] = name
         await admin_response(message, 'Send the text, photo, video or other single message to use. /cancel to cancel.' +
-                             (' It will be broadcast to saved users.' if name == 'broadcast' else ' It will be saved; click REDIRECT to send it.'), edit=edit)
+                             (' It will be broadcast to saved users.' if name == 'broadcast' else ' It will replace the first rotation message after the next REVERSE → REDIRECT. Other rotation posts remain in English.'), edit=edit)
     elif name == 'stats':
         await admin_response(message, await dbcall('stats'), edit=edit, reply_markup=panel())
     elif name == 'cancel':
@@ -175,7 +189,7 @@ async def callback(query: CallbackQuery):
     await query.answer()
     if query.data == 'confirm_redirect':
         campaign = await dbcall('enable_redirect', ADMIN_ID)
-        await admin_response(query.message, f'Redirect enabled. Campaign #{campaign}.', edit=True, reply_markup=panel())
+        await admin_response(query.message, f'Redirect rotation enabled. Campaign #{campaign}. First post queued now; next stages every 2 hours. /stop lets users opt out.', edit=True, reply_markup=panel())
     elif query.data and query.data.startswith('send_draft:'):
         campaign = await dbcall('confirm_draft', query.data.split(':', 1)[1], ADMIN_ID)
         if campaign is None:
@@ -247,6 +261,55 @@ async def send_payload(bot, row):
             await bot.send_message(row['user_id'], text, reply_markup=keyboard)
     else:
         await bot.send_message(row['user_id'], row['text'])
+
+
+async def send_rotation_payload(bot, row):
+    """Send one English rotation step with a real Telegram inline link."""
+    step = row['step']
+    text, _label, _url = MESSAGES[step]
+    if step == 0:
+        # Preserve the admin's optional custom first redirect message.
+        source_chat = await dbcall('get', 'redirect_chat')
+        source_message = await dbcall('get', 'redirect_message')
+        if source_chat and source_message:
+            await bot.copy_message(row['user_id'], int(source_chat), int(source_message))
+            return
+    await bot.send_message(row['user_id'], text, reply_markup=rotation_keyboard(step))
+
+
+async def rotation_worker(bot):
+    """Two-hour, per-user persistent rotation, independent from manual broadcasts."""
+    while True:
+        try:
+            row = await dbcall('next_rotation')
+            if not row:
+                await asyncio.sleep(1)
+                continue
+            async with delivery_lock(row['user_id']):
+                if not await dbcall('claim_rotation', row['campaign'], row['user_id'], row['step']):
+                    continue
+                try:
+                    await send_rotation_payload(bot, row)
+                except TelegramRetryAfter as error:
+                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                                 row['step'], 'pending', float(error.retry_after) + 1)
+                except TelegramForbiddenError:
+                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                                 row['step'], 'blocked')
+                except TelegramBadRequest:
+                    logging.warning('Rotation permanently failed for user %s', row['user_id'])
+                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                                 row['step'], 'failed')
+                except (TelegramNetworkError, OSError):
+                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                                 row['step'], 'pending', 60)
+                else:
+                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                                 row['step'], 'sent')
+            await asyncio.sleep(0.1)
+        except Exception:
+            logging.exception('Rotation worker error')
+            await asyncio.sleep(5)
 
 
 async def worker(bot):
@@ -346,6 +409,7 @@ async def main():
     lease = await acquire_worker_lease(database_url, stop_event)
     await dbcall('recover_deliveries')
     task = asyncio.create_task(worker(bot))
+    rotation_task = asyncio.create_task(rotation_worker(bot))
     polling = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     shutdown = asyncio.create_task(stop_event.wait())
     heartbeat = asyncio.create_task(watch_lease(lease))
@@ -355,9 +419,9 @@ async def main():
             if finished is not shutdown:
                 finished.result()
     finally:
-        for running in (task, polling, shutdown, heartbeat):
+        for running in (task, rotation_task, polling, shutdown, heartbeat):
             running.cancel()
-        await asyncio.gather(task, polling, shutdown, heartbeat, return_exceptions=True)
+        await asyncio.gather(task, rotation_task, polling, shutdown, heartbeat, return_exceptions=True)
         await lease.close()
         await asyncio.to_thread(store.close)
         await bot.session.close()
