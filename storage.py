@@ -104,30 +104,52 @@ class Storage:
             self.execute('INSERT INTO deliveries(campaign,user_id) SELECT ?,id FROM users WHERE active=1 AND id<>?', (campaign, exclude_id))
         return campaign
 
-    def enable_redirect(self, exclude_id=0):
-        """Start one persistent two-hour rotation, without resending on repeat clicks."""
+    def enable_redirect(self, admin_id=0, restart=False):
+        """Queue step 0 immediately for all active users, including the admin.
+
+        REDIRECT is an intentional restart when restart=True. A background
+        rollout or repeated internal call with restart=False is idempotent.
+        """
         import time
         with self.transaction():
             existing = self.get('rotation_campaign')
-            if (self.get('mode') == 'redirect' and existing and
-                    self.get('redirect_campaign') == existing):
+            if (not restart and self.get('mode') == 'redirect' and existing
+                    and self.get('redirect_campaign') == existing):
                 return int(existing)
             old = self.get('redirect_campaign')
             if old:
                 self.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (int(old),))
+            # The admin explicitly opted into the preview/rotation by clicking REDIRECT.
+            if admin_id:
+                self.execute('UPDATE users SET active=1 WHERE id=?', (admin_id,))
             row = self.execute('INSERT INTO campaigns(text) VALUES (?) RETURNING id',
                                ('DREW FX ROTATION',)).fetchone()
             campaign = int(row['id'])
             now = int(time.time())
             self.execute("UPDATE rotations SET status='cancelled' WHERE status IN ('pending','sending')")
             self.execute("""INSERT INTO rotations(user_id,campaign,step,due_at,status)
-                SELECT id,?,0,?,'pending' FROM users WHERE active=1 AND id<>?
+                SELECT id,?,0,?,'pending' FROM users WHERE active=1
                 ON CONFLICT(user_id) DO UPDATE SET campaign=excluded.campaign,
-                  step=0,due_at=excluded.due_at,status='pending'""", (campaign, now, exclude_id))
+                  step=0,due_at=excluded.due_at,status='pending'""", (campaign, now))
             self.set('mode', 'redirect')
             self.set('redirect_campaign', campaign)
             self.set('rotation_campaign', campaign)
             return campaign
+
+    def rotation_for_user(self, user_id, now=None):
+        """Get a due rotation row for the admin fast path without changing state."""
+        import time
+        now = int(time.time() if now is None else now)
+        with self.transaction():
+            campaign = self.get('rotation_campaign')
+            if self.get('mode') != 'redirect' or not campaign:
+                return None
+            row = self.execute("""SELECT r.user_id,r.campaign,r.step,r.due_at,u.first_name
+                FROM rotations r JOIN users u ON u.id=r.user_id
+                WHERE r.user_id=? AND r.status='pending' AND r.campaign=?
+                  AND r.due_at<=? AND u.active=1""",
+                (user_id, int(campaign), now)).fetchone()
+            return dict(row) if row else None
 
     def reverse(self):
         with self.transaction():
@@ -146,7 +168,7 @@ class Storage:
             self.save_user(user)
             self.execute('UPDATE users SET active=1 WHERE id=?', (user.id,))
             campaign = self.get('rotation_campaign')
-            if (user.id != exclude_id and self.get('mode') == 'redirect' and campaign):
+            if self.get('mode') == 'redirect' and campaign:
                 self.execute("""INSERT INTO rotations(user_id,campaign,step,due_at,status)
                     VALUES (?,?,0,?,'pending')
                     ON CONFLICT(user_id) DO UPDATE SET
