@@ -6,7 +6,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, BotCommandScopeChat, BotCommandScopeDefault, MenuButtonCommands
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError, TelegramError
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError, TelegramAPIError
 from aiogram import BaseMiddleware
 from uuid import uuid4
 from storage import Storage, DEFAULT_MESSAGE, REVERSE_MESSAGE
@@ -336,7 +336,7 @@ async def preview_rotation(message):
             await message.answer(f'⚠️ Preview step {step + 1} rate-limited. '
                                  f'Retry the preview later.')
             break
-        except TelegramError as error:
+        except TelegramAPIError as error:
             logging.exception('Admin preview failed for stage %s', step)
             await message.answer(f'⚠️ Preview step {step + 1} failed: '
                                  f'{type(error).__name__}. Check Render logs.')
