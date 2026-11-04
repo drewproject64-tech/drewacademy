@@ -204,7 +204,7 @@ async def action(message, name, edit=False, from_keyboard=False):
                 f'Admin first-message delivery: {first_result}. '
                 'Active subscribers are queued now; remaining stages follow '
                 'at two-hour intervals. REVERSE stops the rotation.',
-                edit=True, reply_markup=None)
+                edit=edit, reply_markup=None)
         else:
             await admin_response(message,
                 'Start or RESTART the five-message DREW FX rotation from message 1? '
