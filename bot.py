@@ -160,7 +160,13 @@ async def admin_response(message, text, edit=False, **kwargs):
 async def action(message, name, edit=False):
     if name == 'redirect':
         composer.pop(message.chat.id, None)
-        await admin_response(message, 'Enable the DREW FX five-message rotation for saved active users? The first post sends now; later posts are spaced two hours apart. After the final admin offer, the cycle repeats until REVERSE. Repeated activation will not restart it.', edit=edit, reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
+        if edit:
+            # Tapping the REDIRECT admin-panel button starts the campaign now.
+            campaign = await dbcall('enable_redirect', ADMIN_ID)
+            await admin_response(message, f'Redirect rotation enabled. Campaign #{campaign}. First post queued now; next stages every 2 hours. REVERSE stops it.', edit=True, reply_markup=panel())
+        else:
+            # The text command still has an explicit confirmation.
+            await admin_response(message, 'Enable the DREW FX five-message rotation for saved active users? The first post sends now; later posts are spaced two hours apart. After the final admin offer, the cycle repeats until REVERSE. Repeated activation will not restart it.', reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
     elif name == 'reverse':
         composer.pop(message.chat.id, None)
         await dbcall('reverse')
