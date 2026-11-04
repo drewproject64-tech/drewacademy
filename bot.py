@@ -100,7 +100,7 @@ async def start(message: Message):
             await message.answer(
                 '📈 DREW FX updates are active. Market insights and English '
                 'community-message translations arrive every two hours. '
-                'Tap below to explore, or use /stop to opt out.',
+                'Tap below to explore the community.',
                 reply_markup=community_keyboard())
         else:
             await message.answer(DEFAULT_MESSAGE, reply_markup=community_keyboard())
