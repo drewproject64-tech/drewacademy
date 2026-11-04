@@ -1,6 +1,14 @@
 """DREW FX rotation: English translations of supplied, unverified screenshots."""
 ROTATION_INTERVAL_SECONDS = 2 * 60 * 60
 ROTATION_COUNT = 5
+# Actual GitHub testimonial screenshots, in the same order as the translated captions.
+# Original Spanish pixels stay unchanged; the Telegram photo captions are English.
+TESTIMONIAL_IMAGES = {
+    1: "testimonial_1_ramiro.jpg",
+    2: "testimonial_2_joaquin.jpg",
+    3: "testimonial_3_rubin.jpg",
+}
+
 ADMIN_URL = "https://t.me/drewFxx?text=SIGNALS"
 COMMUNITY_URL = "https://t.me/DrewFXHub"
 
