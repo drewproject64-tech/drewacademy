@@ -17,7 +17,7 @@ class StorageTests(unittest.TestCase):
             campaign = s.enable_redirect()
             self.assertEqual(s.next_rotation()['user_id'], 1)
             self.assertTrue(s.claim_rotation(campaign, 1, 0))
-            s.finish_rotation(campaign, 1, 0, 'sent', now=100)
+            s.finish_rotation(campaign, 1, 0, 'sent')
             s.started(user(1))
             self.assertIsNone(s.next_rotation())
             s.started(user(2))
