@@ -161,7 +161,9 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(kwargs['chat_id'], 123)
                 self.assertEqual(Path(kwargs['photo'].path).name, TESTIMONIAL_IMAGES[step])
                 self.assertEqual(kwargs['caption'], MESSAGES[step][0])
-                self.assertIn('verified', kwargs['caption'].lower())
+                self.assertNotIn('independently verified', kwargs['caption'].lower())
+                self.assertNotIn('trading involves risk', kwargs['caption'].lower())
+                self.assertIn('English translation', kwargs['caption'])
                 self.assertEqual(kwargs['reply_markup'].inline_keyboard[0][0].url, ADMIN_URL)
 
     async def test_missing_testimonial_photo_uses_english_caption_fallback(self):
