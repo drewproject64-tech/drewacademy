@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, BotCommandScopeChat, BotCommandScopeDefault, MenuButtonCommands
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, FSInputFile, BotCommand, BotCommandScopeChat, BotCommandScopeDefault, MenuButtonCommands
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError, TelegramAPIError
 from aiogram import BaseMiddleware
 from uuid import uuid4
@@ -71,14 +71,31 @@ def rotation_keyboard(index):
     ]])
 
 
-def panel():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='REDIRECT', callback_data='redirect'), InlineKeyboardButton(text='REVERSE', callback_data='reverse')],
-        [InlineKeyboardButton(text='Preview All 5 Messages', callback_data='preview')],
-        [InlineKeyboardButton(text='Edit Redirect Message', callback_data='set_redirect')],
-        [InlineKeyboardButton(text='Broadcast Message / Offer', callback_data='broadcast')],
-        [InlineKeyboardButton(text='Users & Stats', callback_data='stats')],
-        [InlineKeyboardButton(text='Cancel', callback_data='cancel')]])
+ADMIN_BUTTON_ACTIONS = {
+    'REDIRECT': 'redirect',
+    'REVERSE': 'reverse',
+    'Preview All 5 Messages': 'preview',
+    'Users & Stats': 'stats',
+}
+
+
+def admin_keyboard():
+    """Persistent Telegram reply keyboard shown beneath the admin's chat input.
+
+    Admin authentication happens in handlers, not in the keyboard itself.
+    Never attach this keyboard to a subscriber message.
+    """
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text='REDIRECT'), KeyboardButton(text='REVERSE')],
+            [KeyboardButton(text='Preview All 5 Messages')],
+            [KeyboardButton(text='Users & Stats')],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        one_time_keyboard=False,
+        input_field_placeholder='DREW FX admin controls',
+    )
 
 
 def admin(message):
@@ -95,6 +112,12 @@ async def start(message: Message):
             logging.info('Ignored rapid repeated start request')
             return
         await dbcall('started', message.from_user, ADMIN_ID)
+        if admin(message):
+            await message.answer(
+                '🛠 DREW FX admin controls are ready below. '
+                'Use /broadcast or /editredirect for additional tools.',
+                reply_markup=admin_keyboard())
+            return
         if await dbcall('get', 'mode', 'normal') == 'redirect':
             # The rotation worker sends the first post once. Do not send a
             # second copy of that post in the /start handler.
@@ -107,15 +130,22 @@ async def start(message: Message):
             await message.answer(DEFAULT_MESSAGE, reply_markup=community_keyboard())
 
 
-@dp.message(Command('admin', 'redirect', 'reverse', 'preview', 'send', 'cancel', 'help', 'id'))
+@dp.message(Command('admin', 'redirect', 'reverse', 'preview', 'broadcast', 'editredirect', 'send', 'cancel', 'help', 'id'))
 async def commands(message: Message):
     command = message.text.split()[0].split('@')[0].lower()
     if command == '/id':
         await message.answer(f'Your Telegram user ID: {message.from_user.id}')
         return
     if command == '/help':
-        await message.answer('Use /start to open the bot. /stop opts out of broadcasts.' +
-                             ('\n/admin — controls\n/preview — privately show all 5 messages\n/redirect — start or restart the rotation\n/reverse — normal mode\n/send MESSAGE — broadcast\n/cancel — close composer' if admin(message) else ''))
+        if admin(message):
+            await message.answer(
+                'Use the four admin buttons beneath the chat input. '
+                '/broadcast creates a manual broadcast; /editredirect edits '
+                'the first rotation message; /send MESSAGE broadcasts text '
+                'with confirmation; /cancel closes editing.',
+                reply_markup=admin_keyboard())
+        else:
+            await message.answer('Use /start to open the bot. /stop opts out of broadcasts.')
         return
     if not admin(message):
         await message.answer(f'Administrator only. Your Telegram user ID is {message.from_user.id}. If you own this bot, set ADMIN_ID to this number in Render, then redeploy.')
@@ -127,25 +157,27 @@ async def commands(message: Message):
             return
         await draft(message, text=text)
     else:
-        await action(message, command[1:])
+        await action(message, {'editredirect': 'set_redirect'}.get(command[1:], command[1:]))
 
 
 async def show_admin_panel(message):
-    # Reuse one persisted control message even if /admin arrives twice.
+    # Reply keyboards cannot be attached by editing an old bot message.
+    # Retire the old inline-only panel once, then send the new bottom keyboard.
     async with delivery_lock(ADMIN_ID):
-        saved = await dbcall('get', 'admin_panel_message')
-        if saved:
+        old_panel = await dbcall('get', 'admin_panel_message')
+        if old_panel:
             try:
-                await message.bot.edit_message_text(chat_id=message.chat.id, message_id=int(saved),
-                    text='Administrator controls', reply_markup=panel())
-                return
-            except TelegramBadRequest as error:
-                if 'message is not modified' in str(error).lower():
-                    return
-                if not any(reason in str(error).lower() for reason in ('message to edit not found', "message can't be edited", 'message identifier')):
-                    raise
-        sent = await message.answer('Administrator controls', reply_markup=panel())
-        await dbcall('set', 'admin_panel_message', sent.message_id)
+                await message.bot.edit_message_reply_markup(
+                    chat_id=message.chat.id,
+                    message_id=int(old_panel),
+                    reply_markup=None)
+            except TelegramAPIError:
+                logging.info('Old inline admin panel was already removed')
+            await dbcall('set', 'admin_panel_message', '')
+        await message.answer(
+            '🛠 DREW FX admin controls are available beneath the message field. '
+            'Use /broadcast or /editredirect for other admin tools.',
+            reply_markup=admin_keyboard())
 
 
 async def admin_response(message, text, edit=False, **kwargs):
@@ -158,11 +190,11 @@ async def admin_response(message, text, edit=False, **kwargs):
             raise
 
 
-async def action(message, name, edit=False):
+async def action(message, name, edit=False, from_keyboard=False):
     if name == 'redirect':
         composer.pop(message.chat.id, None)
-        if edit:
-            # One intentional REDIRECT tap restarts the sequence at stage zero.
+        if edit or from_keyboard:
+            # Admin keyboard tap and legacy inline button both start immediately.
             # The admin gets the same stage-zero message immediately; everyone
             # else is picked up by the persistent worker.
             campaign = await dbcall('enable_redirect', ADMIN_ID, True)
@@ -172,7 +204,7 @@ async def action(message, name, edit=False):
                 f'Admin first-message delivery: {first_result}. '
                 'Active subscribers are queued now; remaining stages follow '
                 'at two-hour intervals. REVERSE stops the rotation.',
-                edit=True, reply_markup=panel())
+                edit=True, reply_markup=None)
         else:
             await admin_response(message,
                 'Start or RESTART the five-message DREW FX rotation from message 1? '
@@ -191,14 +223,14 @@ async def action(message, name, edit=False):
     elif name == 'preview':
         composer.pop(message.chat.id, None)
         if edit:
-            await admin_response(message, 'Sending a private five-message preview to the admin now. Subscriber schedules are unchanged.', edit=True, reply_markup=panel())
+            await admin_response(message, 'Sending a private five-message preview to the admin now. Subscriber schedules are unchanged.', edit=True, reply_markup=None)
         await preview_rotation(message)
     elif name == 'stats':
-        await admin_response(message, await dbcall('stats'), edit=edit, reply_markup=panel())
+        await admin_response(message, await dbcall('stats'), edit=edit, reply_markup=None)
     elif name == 'cancel':
         composer.pop(message.chat.id, None)
         await dbcall('set', 'draft', '')
-        await admin_response(message, 'Composer cancelled.', edit=edit, reply_markup=panel())
+        await admin_response(message, 'Composer cancelled.', edit=edit, reply_markup=None)
     elif name == 'admin':
         await show_admin_panel(message)
     else:
@@ -218,13 +250,13 @@ async def callback(query: CallbackQuery):
             f'✅ Rotation #{campaign} started at message 1. '
             f'Admin first-message delivery: {first_result}. '
             'Active users are queued now; subsequent stages are two hours apart.',
-            edit=True, reply_markup=panel())
+            edit=True, reply_markup=None)
     elif query.data and query.data.startswith('send_draft:'):
         campaign = await dbcall('confirm_draft', query.data.split(':', 1)[1], ADMIN_ID)
         if campaign is None:
             await query.message.answer('This preview has expired. Compose a new message.')
             return
-        await admin_response(query.message, f'Broadcast #{campaign} queued.', edit=True, reply_markup=panel())
+        await admin_response(query.message, f'Broadcast #{campaign} queued.', edit=True, reply_markup=None)
     else:
         await action(query.message, query.data, edit=True)
 
@@ -244,10 +276,14 @@ async def compose(message: Message):
     if not admin(message):
         await dbcall('save_user', message.from_user)
         return
+    # Handle the four persistent keyboard labels before any pending composer.
+    # This prevents e.g. REDIRECT from being mistaken for broadcast text.
+    if message.text and message.text.strip() in ADMIN_BUTTON_ACTIONS:
+        await action(message, ADMIN_BUTTON_ACTIONS[message.text.strip()],
+                     from_keyboard=True)
+        return
     mode = composer.pop(message.chat.id, None)
     if not mode:
-        if message.text and message.text.upper() in ('REDIRECT', 'REVERSE'):
-            await action(message, message.text.lower())
         return
     if message.media_group_id:
         composer[message.chat.id] = mode
@@ -263,7 +299,7 @@ async def compose(message: Message):
     if mode == 'set_redirect':
         await dbcall('set', 'redirect_chat', message.chat.id)
         await dbcall('set', 'redirect_message', preview.message_id)
-        await message.answer('Redirect message saved for the next activation. If redirect is already enabled, use REVERSE first, then REDIRECT.', reply_markup=panel())
+        await message.answer('Redirect message saved for the next activation. If redirect is already enabled, use REVERSE first, then REDIRECT.', reply_markup=None)
     else:
         await draft(message, source_chat=message.chat.id, source_message=preview.message_id)
 
@@ -497,9 +533,11 @@ async def main():
     await bot.set_my_commands([BotCommand(command='start', description='Open Drew FX'),
                                BotCommand(command='help', description='Help'),
                                BotCommand(command='stop', description='Stop broadcasts')], scope=BotCommandScopeDefault())
-    await bot.set_my_commands([BotCommand(command='admin', description='Admin panel'),
+    await bot.set_my_commands([BotCommand(command='admin', description='Show admin keyboard'),
                                BotCommand(command='start', description='Open bot'),
                                BotCommand(command='preview', description='Preview all rotation messages'),
+                               BotCommand(command='broadcast', description='Compose a broadcast'),
+                               BotCommand(command='editredirect', description='Edit first rotation message'),
                                BotCommand(command='cancel', description='Cancel composer')], scope=BotCommandScopeChat(chat_id=ADMIN_ID))
     await bot.set_chat_menu_button(chat_id=ADMIN_ID, menu_button=MenuButtonCommands())
     logging.info('Admin-only command menu configured.')
