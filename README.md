@@ -7,10 +7,11 @@ Set `BOT_TOKEN`, `ADMIN_ID` (numeric Telegram ID), and `DATABASE_URL` in Render'
 
 Only `ADMIN_ID` in a private chat can open `/admin` or operate buttons. Telegram's command menu beside the chat box includes `/admin` only for that chat. The inline panel offers:
 
-- **Users & Stats**: total users, active/inactive users, new today (UTC), mode, and pending/sent/blocked/failed/cancelled delivery counts. Totals include the administrator if they have interacted.
+- **Users & Stats**: total users, active/inactive users, new today (UTC), mode, counts by scheduled rotation stage, rotation failures and blocked users, plus separate manual-broadcast delivery counts. Totals include the administrator if they have interacted.
 - **Broadcast Message / Offer**: compose one text, photo, video or other copyable message. A preview and **Send broadcast** button appear; nothing is queued until confirmed. `/send MESSAGE` uses the same confirmation. Ordinary admin messages never broadcast. Confirmation is consumed once.
 - **Edit Redirect Message**: saves a custom source message for the next activation. Keep the preview in the admin chat available for copying. If redirect is enabled, choose REVERSE then REDIRECT to apply an edited message.
-- **REDIRECT**: confirm activation to launch the five-stage forex message rotation for active saved subscribers (excluding the admin). The first message is queued immediately. Each following message arrives **two hours after the preceding successful send** for that subscriber. After the fifth message, the sequence loops from the first until REVERSE. Repeated activation while already active is idempotent. New /start users join at stage one. If you saved a custom redirect message, it is copied as stage one; otherwise the built-in introduction and community button are used.
+- **Preview All 5 Messages**: privately sends all five messages, including real testimonial images, English captions, and the exact inline buttons, to the administrator immediately. Does not alter the subscriber database, campaign status, or rotation timing. Admin command: `/preview`.
+- **REDIRECT**: one admin-panel tap starts **or restarts** the five-stage sequence from message 1 for active saved subscribers **including the admin**. The admin receives message 1 directly in the callback, while the persistent worker starts delivering message 1 to other subscribers immediately. Each following message arrives **two hours after the preceding successful send** for that subscriber. After the fifth, the sequence repeats until REVERSE. Tapping REDIRECT again intentionally restarts the entire rotation (and may result in a second message 1), so use it only when you want to restart. New /start users join at stage one. A custom first message saved earlier is copied as stage one; otherwise the built-in introduction and community button are used. The `/redirect` text command asks for confirmation before restarting.
 - **REVERSE**: stops the rotation, cancels remaining queued posts, and restores the original normal /start response. Custom broadcasts continue. Already delivered messages cannot be recalled; a currently in-flight send may complete.
 - **Cancel**: closes the composer and invalidates its current broadcast preview.
 
@@ -30,7 +31,7 @@ Each testimonial is now delivered as one Telegram **photo with an English captio
 
 ## Deployment and verification
 
-After the GitHub commit, redeploy the existing Render service from `main` if automatic deployment is disabled. Keep its current BOT_TOKEN, ADMIN_ID, DATABASE_URL, and the existing Neon database. The new rotation table is created automatically; do not reset the database. Use a single worker for the token, and check `/admin` and the new REDIRECT confirmation to enable the sequence. A new code deployment by itself does **not** start a campaign.
+After the GitHub commit, redeploy the existing Render service from `main` if automatic deployment is disabled. Wait until the new deploy is live before clicking REDIRECT; deployment alone does not restart an existing campaign. Keep its current BOT_TOKEN, ADMIN_ID, DATABASE_URL, and the existing Neon database. The new rotation table is created automatically; do not reset the database. Use a single worker for the token, and check `/admin` and the new REDIRECT confirmation to enable the sequence. A new code deployment by itself does **not** start a campaign.
 
 Test locally: `python -m unittest -v test_storage.py test_bot.py test_rotation.py`. GitHub Actions also runs syntax and unit checks on commits.
 
