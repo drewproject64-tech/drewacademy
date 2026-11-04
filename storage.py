@@ -321,13 +321,22 @@ class Storage:
                 JOIN campaigns c ON c.id=d.campaign GROUP BY 1''').fetchall()}
             today = self.execute('SELECT COUNT(*) AS n FROM users WHERE first_seen>=?', (datetime.now(timezone.utc).date().isoformat(),)).fetchone()['n']
             rotation_id = self.get('rotation_campaign')
-            rotations = 0
+            rotation_counts = {'pending': 0, 'sending': 0, 'failed': 0, 'blocked': 0}
+            stage_counts = {}
             if self.get('mode') == 'redirect' and rotation_id:
-                rotations = self.execute("""SELECT COUNT(*) AS n FROM rotations WHERE campaign=?
-                    AND status IN ('pending','sending')""", (int(rotation_id),)).fetchone()['n']
+                for rec in self.execute("""SELECT status,step,COUNT(*) AS n FROM rotations
+                    WHERE campaign=? GROUP BY status,step""", (int(rotation_id),)).fetchall():
+                    rotation_counts[rec['status']] = rotation_counts.get(rec['status'], 0) + rec['n']
+                    if rec['status'] in ('pending', 'sending'):
+                        stage_counts[rec['step'] + 1] = stage_counts.get(rec['step'] + 1, 0) + rec['n']
+            rotations = rotation_counts['pending'] + rotation_counts['sending']
+            stage_text = ', '.join(f'{stage}: {count}' for stage, count in sorted(stage_counts.items())) or 'none'
             return (f"Total users: {row['total']}\nActive users: {row['active']}\nInactive users: {row['total']-row['active']}"
                     f"\nNew today (UTC): {today}\nMode: {self.get('mode','normal')}"
-                    f"\nRotation subscribers: {rotations}\nRotation interval: 2 hours\n"
+                    f"\nRotation subscribers: {rotations}\nRotation interval: 2 hours"
+                    f"\nNext stage counts: {stage_text}"
+                    f"\nRotation failed: {rotation_counts['failed']}"
+                    f"\nRotation blocked: {rotation_counts['blocked']}\n"
                     + '\n'.join(f'{k.title()}: {counts.get(k,0)}' for k in ('pending','sent','blocked','failed','cancelled')))
 
     def confirm_draft(self, nonce, exclude_id):
