@@ -77,15 +77,26 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
                                   from_user=user(99), answer=AsyncMock())
         await bot.start(message)
-        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE, reply_markup=bot.community_keyboard())
+        message.answer.assert_awaited_once()
+        self.assertIn('admin controls', message.answer.await_args.args[0])
+        self.assertIsInstance(message.answer.await_args.kwargs['reply_markup'],
+                              bot.ReplyKeyboardMarkup)
 
     async def test_admin_command_still_opens_panel(self):
         message = SimpleNamespace(text='/admin', chat=SimpleNamespace(type='private', id=99),
                                   from_user=user(99), answer=AsyncMock())
         await bot.commands(message)
-        self.assertEqual(message.answer.await_args.args[0], 'Administrator controls')
-        buttons = [button.callback_data for row in message.answer.await_args.kwargs['reply_markup'].inline_keyboard for button in row]
-        self.assertIn('stats', buttons)
+        self.assertIn('admin controls', message.answer.await_args.args[0])
+        keyboard = message.answer.await_args.kwargs['reply_markup']
+        self.assertIsInstance(keyboard, bot.ReplyKeyboardMarkup)
+        self.assertEqual(
+            [[b.text for b in row] for row in keyboard.keyboard],
+            [['REDIRECT', 'REVERSE'],
+             ['Preview All 5 Messages'],
+             ['Users & Stats']])
+        self.assertTrue(keyboard.is_persistent)
+        self.assertTrue(keyboard.resize_keyboard)
+        self.assertFalse(keyboard.one_time_keyboard)
 
     async def test_nonadmin_cannot_use_stats_or_send_buttons(self):
         for button in ('stats', 'confirm_redirect', 'send_draft:fake'):
@@ -225,20 +236,64 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AdminPanelReuseTests(BotTests):
-    async def test_repeated_admin_reuses_one_panel(self):
+    async def test_admin_removes_old_inline_panel_and_shows_bottom_keyboard(self):
+        bot.store.set('admin_panel_message', '456')
         message = SimpleNamespace(text='/admin', chat=SimpleNamespace(type='private', id=99),
-            from_user=user(99), answer=AsyncMock(return_value=SimpleNamespace(message_id=456)),
-            bot=SimpleNamespace(edit_message_text=AsyncMock()))
+            from_user=user(99), answer=AsyncMock(),
+            bot=SimpleNamespace(edit_message_reply_markup=AsyncMock()))
         await bot.commands(message)
+        message.bot.edit_message_reply_markup.assert_awaited_once_with(
+            chat_id=99, message_id=456, reply_markup=None)
+        self.assertEqual(bot.store.get('admin_panel_message'), '')
+        self.assertIsInstance(
+            message.answer.await_args.kwargs['reply_markup'], bot.ReplyKeyboardMarkup)
         await bot.commands(message)
-        message.answer.assert_awaited_once()
-        message.bot.edit_message_text.assert_awaited_once()
-        self.assertEqual(message.bot.edit_message_text.await_args.kwargs['message_id'], 456)
+        message.bot.edit_message_reply_markup.assert_awaited_once()
+        self.assertEqual(message.answer.await_count, 2)
 
-    async def test_repeated_callback_edits_existing_panel(self):
+    async def test_admin_keyboard_buttons_dispatch_without_inline_panel(self):
+        bot.store.started(user(99))
+        bot.store.started(user(1))
+        api = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock(),
+                              copy_message=AsyncMock())
+        for label in ('Users & Stats', 'Preview All 5 Messages', 'REDIRECT', 'REVERSE'):
+            with self.subTest(label=label):
+                message = SimpleNamespace(text=label, from_user=user(99),
+                    chat=SimpleNamespace(type='private', id=99),
+                    bot=api, answer=AsyncMock())
+                await bot.compose(message)
+                self.assertTrue(message.answer.await_count >= 1)
+                self.assertIsNone(bot.composer.get(99))
+        self.assertEqual(bot.store.get('mode'), 'normal')
+        self.assertEqual(api.send_photo.await_count, 3)
+        self.assertEqual(api.send_message.await_count, 3)
+        self.assertEqual(bot.store.db.execute('SELECT COUNT(*) FROM campaigns').fetchone()[0], 1)
+
+    async def test_compose_mode_does_not_intercept_admin_keyboard_buttons(self):
+        bot.store.started(user(99))
+        bot.composer[99] = 'broadcast'
+        message = SimpleNamespace(text='Users & Stats', from_user=user(99),
+            chat=SimpleNamespace(type='private', id=99), answer=AsyncMock())
+        await bot.compose(message)
+        self.assertEqual(bot.composer.get(99), 'broadcast')
+        self.assertIn('Total users', message.answer.await_args.args[0])
+        self.assertEqual(bot.store.db.execute('SELECT COUNT(*) FROM campaigns').fetchone()[0], 0)
+
+    async def test_nonadmin_text_cannot_control_admin_keyboard_actions(self):
+        bot.store.started(user(1))
+        api = SimpleNamespace(send_message=AsyncMock())
+        message = SimpleNamespace(text='REDIRECT', from_user=user(1),
+            chat=SimpleNamespace(type='private', id=1), bot=api,
+            answer=AsyncMock())
+        await bot.compose(message)
+        self.assertEqual(bot.store.get('mode'), 'normal')
+        message.answer.assert_not_awaited()
+
+    async def test_legacy_callback_removes_its_own_inline_panel(self):
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
             edit_text=AsyncMock(), answer=AsyncMock(),
             bot=SimpleNamespace(send_message=AsyncMock()))
         await bot.action(message, 'redirect', edit=True)
         message.edit_text.assert_awaited_once()
+        self.assertIsNone(message.edit_text.await_args.kwargs['reply_markup'])
         message.answer.assert_not_awaited()
