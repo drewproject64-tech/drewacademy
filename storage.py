@@ -216,7 +216,7 @@ class Storage:
         from rotation import ROTATION_COUNT, ROTATION_INTERVAL_SECONDS
         with self.transaction():
             self.execute("UPDATE deliveries SET status='pending' WHERE status='sending'")
-            self.execute("""UPDATE rotations SET step=(step+1)%?,
+            self.execute("""UPDATE rotations SET step=MOD(step+1, ?),
                 due_at=?,status='pending' WHERE status='sending'""",
                 (ROTATION_COUNT, int(time.time()) + ROTATION_INTERVAL_SECONDS))
 
