@@ -74,6 +74,42 @@ class RotationStorageTests(unittest.TestCase):
         later = int(time.time()) + ROTATION_INTERVAL_SECONDS + 3
         self.assertEqual(self.s.next_rotation(now=later)['step'], 1)
 
+    def test_postgres_recovery_query_uses_two_unambiguous_parameters(self):
+        from contextlib import contextmanager
+
+        class FakePostgres:
+            def __init__(self):
+                self.calls = []
+
+            def execute(self, sql, args=()):
+                self.calls.append((sql, args))
+                return self
+
+            def fetchone(self):
+                return None
+
+            @contextmanager
+            def transaction(self):
+                yield
+
+        original_db, original_postgres = self.s.db, self.s.postgres
+        fake = FakePostgres()
+        try:
+            self.s.db = fake
+            self.s.postgres = True
+            self.s.recover_deliveries()
+        finally:
+            self.s.db = original_db
+            self.s.postgres = original_postgres
+
+        recovery = [call for call in fake.calls if 'UPDATE rotations' in call[0]]
+        self.assertEqual(len(recovery), 1)
+        sql, params = recovery[0]
+        self.assertIn('MOD(step+1, %s)', sql)
+        self.assertIn('due_at=%s', sql)
+        self.assertEqual(len(params), 2)
+        self.assertNotIn('(step+1)%s', sql)
+
     def test_english_translations_and_prefilled_admin_cta(self):
         self.assertEqual(len(MESSAGES), 5)
         self.assertIn('withdrew $60', MESSAGES[1][0])
