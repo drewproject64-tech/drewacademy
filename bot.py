@@ -6,7 +6,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, BotCommandScopeChat, BotCommandScopeDefault, MenuButtonCommands
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest, TelegramNetworkError, TelegramError
 from aiogram import BaseMiddleware
 from uuid import uuid4
 from storage import Storage, DEFAULT_MESSAGE, REVERSE_MESSAGE
@@ -74,6 +74,7 @@ def rotation_keyboard(index):
 def panel():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='REDIRECT', callback_data='redirect'), InlineKeyboardButton(text='REVERSE', callback_data='reverse')],
+        [InlineKeyboardButton(text='Preview All 5 Messages', callback_data='preview')],
         [InlineKeyboardButton(text='Edit Redirect Message', callback_data='set_redirect')],
         [InlineKeyboardButton(text='Broadcast Message / Offer', callback_data='broadcast')],
         [InlineKeyboardButton(text='Users & Stats', callback_data='stats')],
@@ -106,7 +107,7 @@ async def start(message: Message):
             await message.answer(DEFAULT_MESSAGE, reply_markup=community_keyboard())
 
 
-@dp.message(Command('admin', 'redirect', 'reverse', 'send', 'cancel', 'help', 'id'))
+@dp.message(Command('admin', 'redirect', 'reverse', 'preview', 'send', 'cancel', 'help', 'id'))
 async def commands(message: Message):
     command = message.text.split()[0].split('@')[0].lower()
     if command == '/id':
@@ -114,7 +115,7 @@ async def commands(message: Message):
         return
     if command == '/help':
         await message.answer('Use /start to open the bot. /stop opts out of broadcasts.' +
-                             ('\n/admin — controls\n/redirect — enable and broadcast\n/reverse — normal mode\n/send MESSAGE — broadcast\n/cancel — close composer' if admin(message) else ''))
+                             ('\n/admin — controls\n/preview — privately show all 5 messages\n/redirect — start or restart the rotation\n/reverse — normal mode\n/send MESSAGE — broadcast\n/cancel — close composer' if admin(message) else ''))
         return
     if not admin(message):
         await message.answer(f'Administrator only. Your Telegram user ID is {message.from_user.id}. If you own this bot, set ADMIN_ID to this number in Render, then redeploy.')
@@ -161,12 +162,24 @@ async def action(message, name, edit=False):
     if name == 'redirect':
         composer.pop(message.chat.id, None)
         if edit:
-            # Tapping the REDIRECT admin-panel button starts the campaign now.
-            campaign = await dbcall('enable_redirect', ADMIN_ID)
-            await admin_response(message, f'Redirect rotation enabled. Campaign #{campaign}. First post queued now; next stages every 2 hours. REVERSE stops it.', edit=True, reply_markup=panel())
+            # One intentional REDIRECT tap restarts the sequence at stage zero.
+            # The admin gets the same stage-zero message immediately; everyone
+            # else is picked up by the persistent worker.
+            campaign = await dbcall('enable_redirect', ADMIN_ID, True)
+            first_result = await deliver_admin_first(message.bot)
+            await admin_response(message,
+                f'✅ Rotation #{campaign} started at message 1. '
+                f'Admin first-message delivery: {first_result}. '
+                'Active subscribers are queued now; remaining stages follow '
+                'at two-hour intervals. REVERSE stops the rotation.',
+                edit=True, reply_markup=panel())
         else:
-            # The text command still has an explicit confirmation.
-            await admin_response(message, 'Enable the DREW FX five-message rotation for saved active users? The first post sends now; later posts are spaced two hours apart. After the final admin offer, the cycle repeats until REVERSE. Repeated activation will not restart it.', reply_markup=confirmation('confirm_redirect', 'Enable redirect'))
+            await admin_response(message,
+                'Start or RESTART the five-message DREW FX rotation from message 1? '
+                'The admin receives message 1 immediately and all other active '
+                'users are queued immediately. If already running, this restarts '
+                'the schedule for everyone.',
+                reply_markup=confirmation('confirm_redirect', 'Start rotation'))
     elif name == 'reverse':
         composer.pop(message.chat.id, None)
         await dbcall('reverse')
@@ -175,6 +188,11 @@ async def action(message, name, edit=False):
         composer[message.chat.id] = name
         await admin_response(message, 'Send the text, photo, video or other single message to use. /cancel to cancel.' +
                              (' It will be broadcast to saved users.' if name == 'broadcast' else ' It will replace the first rotation message after the next REVERSE → REDIRECT. Other rotation posts remain in English.'), edit=edit)
+    elif name == 'preview':
+        composer.pop(message.chat.id, None)
+        if edit:
+            await admin_response(message, 'Sending a private five-message preview to the admin now. Subscriber schedules are unchanged.', edit=True, reply_markup=panel())
+        await preview_rotation(message)
     elif name == 'stats':
         await admin_response(message, await dbcall('stats'), edit=edit, reply_markup=panel())
     elif name == 'cancel':
@@ -194,8 +212,13 @@ async def callback(query: CallbackQuery):
         return
     await query.answer()
     if query.data == 'confirm_redirect':
-        campaign = await dbcall('enable_redirect', ADMIN_ID)
-        await admin_response(query.message, f'Redirect rotation enabled. Campaign #{campaign}. First post queued now; next stages every 2 hours. /stop lets users opt out.', edit=True, reply_markup=panel())
+        campaign = await dbcall('enable_redirect', ADMIN_ID, True)
+        first_result = await deliver_admin_first(query.message.bot)
+        await admin_response(query.message,
+            f'✅ Rotation #{campaign} started at message 1. '
+            f'Admin first-message delivery: {first_result}. '
+            'Active users are queued now; subsequent stages are two hours apart.',
+            edit=True, reply_markup=panel())
     elif query.data and query.data.startswith('send_draft:'):
         campaign = await dbcall('confirm_draft', query.data.split(':', 1)[1], ADMIN_ID)
         if campaign is None:
@@ -301,38 +324,85 @@ async def send_rotation_payload(bot, row):
     await bot.send_message(row['user_id'], text, reply_markup=rotation_keyboard(step))
 
 
+async def preview_rotation(message):
+    """Admin-only diagnostic preview; does not mutate anyone's schedule."""
+    await message.answer('🔎 ADMIN PREVIEW: 5 rotation messages follow. '
+                         'This preview is private and does not restart the campaign.')
+    succeeded = 0
+    for step in range(len(MESSAGES)):
+        try:
+            await send_rotation_payload(message.bot, {'user_id': ADMIN_ID, 'step': step})
+        except TelegramRetryAfter as error:
+            await message.answer(f'⚠️ Preview step {step + 1} rate-limited. '
+                                 f'Retry the preview later.')
+            break
+        except TelegramError as error:
+            logging.exception('Admin preview failed for stage %s', step)
+            await message.answer(f'⚠️ Preview step {step + 1} failed: '
+                                 f'{type(error).__name__}. Check Render logs.')
+        else:
+            succeeded += 1
+    await message.answer(f'Preview complete: {succeeded}/{len(MESSAGES)} messages sent. '
+                         'Subscriber schedules were not changed.')
+
+
+async def deliver_rotation_row(bot, row):
+    """One claimed delivery; admin fast path and background worker share this."""
+    async with delivery_lock(row['user_id']):
+        if not await dbcall('claim_rotation', row['campaign'], row['user_id'], row['step']):
+            return 'already claimed by worker'
+        try:
+            await send_rotation_payload(bot, row)
+        except TelegramRetryAfter as error:
+            await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                         row['step'], 'pending', float(error.retry_after) + 1)
+            logging.warning('Rotation rate limit: campaign=%s step=%s',
+                            row['campaign'], row['step'])
+            return 'rate-limited; retry scheduled'
+        except TelegramForbiddenError:
+            await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                         row['step'], 'blocked')
+            logging.warning('Rotation recipient blocked bot: campaign=%s step=%s',
+                            row['campaign'], row['step'])
+            return 'blocked by Telegram'
+        except TelegramBadRequest as error:
+            logging.warning('Rotation permanent failure: campaign=%s step=%s error=%s',
+                            row['campaign'], row['step'], type(error).__name__)
+            await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                         row['step'], 'failed')
+            return 'delivery failed; check logs'
+        except (TelegramNetworkError, OSError):
+            logging.warning('Uncertain rotation delivery: campaign=%s step=%s',
+                            row['campaign'], row['step'])
+            # A timeout can occur after Telegram accepts the message.
+            # Advance rather than risk duplicated posts to a subscriber.
+            await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                         row['step'], 'sent')
+            return 'unconfirmed network response'
+        else:
+            await dbcall('finish_rotation', row['campaign'], row['user_id'],
+                         row['step'], 'sent')
+            logging.info('Rotation delivered: campaign=%s step=%s',
+                         row['campaign'], row['step'] + 1)
+            return 'sent'
+
+
+async def deliver_admin_first(bot):
+    row = await dbcall('rotation_for_user', ADMIN_ID)
+    if row is None:
+        return 'already in progress or not registered'
+    return await deliver_rotation_row(bot, row)
+
+
 async def rotation_worker(bot):
-    """Two-hour, per-user persistent rotation, independent from manual broadcasts."""
+    """Independent persistent per-user scheduler, 2 hours between deliveries."""
     while True:
         try:
             row = await dbcall('next_rotation')
             if not row:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
                 continue
-            async with delivery_lock(row['user_id']):
-                if not await dbcall('claim_rotation', row['campaign'], row['user_id'], row['step']):
-                    continue
-                try:
-                    await send_rotation_payload(bot, row)
-                except TelegramRetryAfter as error:
-                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
-                                 row['step'], 'pending', float(error.retry_after) + 1)
-                except TelegramForbiddenError:
-                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
-                                 row['step'], 'blocked')
-                except TelegramBadRequest:
-                    logging.warning('Rotation permanently failed for user %s', row['user_id'])
-                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
-                                 row['step'], 'failed')
-                except (TelegramNetworkError, OSError):
-                    # After a network timeout, Telegram may have received the post.
-                    # Move to the next step rather than risk repeating the same post.
-                    logging.warning('Uncertain rotation send for user %s; skipping retry to avoid duplicates', row['user_id'])
-                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
-                                 row['step'], 'sent')
-                else:
-                    await dbcall('finish_rotation', row['campaign'], row['user_id'],
-                                 row['step'], 'sent')
+            await deliver_rotation_row(bot, row)
             await asyncio.sleep(0.1)
         except Exception:
             logging.exception('Rotation worker error')
@@ -429,6 +499,7 @@ async def main():
                                BotCommand(command='stop', description='Stop broadcasts')], scope=BotCommandScopeDefault())
     await bot.set_my_commands([BotCommand(command='admin', description='Admin panel'),
                                BotCommand(command='start', description='Open bot'),
+                               BotCommand(command='preview', description='Preview all rotation messages'),
                                BotCommand(command='cancel', description='Cancel composer')], scope=BotCommandScopeChat(chat_id=ADMIN_ID))
     await bot.set_chat_menu_button(chat_id=ADMIN_ID, menu_button=MenuButtonCommands())
     logging.info('Admin-only command menu configured.')
