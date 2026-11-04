@@ -17,14 +17,14 @@ Only `ADMIN_ID` in a private chat can open `/admin` or operate buttons. Telegram
 ## Five-stage redirect rotation (two-hour spacing)
 
 1. DREW FX community introduction, with community button (or your optional custom first message).
-2. English translation of Ramiro Vela's screenshot claim ($30 / $60 / $40), clearly flagged as unverified.
-3. English translation of Joaquín Mora's screenshot claim ($40 / $30 / $35), clearly flagged as unverified.
-4. English translation of Rubin's screenshot claim ($15 / $75), clearly flagged as unverified.
+2. **Photo:** `assets/testimonial_1_ramiro.jpg` — Ramiro Vela screenshot, with English caption ($30 / $60 / $40) clearly flagged as unverified.
+3. **Photo:** `assets/testimonial_2_joaquin.jpg` — Joaquín Mora screenshot, with English-translated caption ($40 / $30 / $35) clearly flagged as unverified.
+4. **Photo:** `assets/testimonial_3_rubin.jpg` — Rubin screenshot, with English-translated caption ($15 / $75) clearly flagged as unverified.
 5. The full DREW FX VIP community announcement, **last** in each cycle, with an inline **MESSAGE ADMIN — SIGNALS** button that links to `https://t.me/drewFxx?text=SIGNALS`. This pre-fills SIGNALS but the subscriber must manually send it.
 
 Every two hours are measured **per user** from the last message's recorded delivery. The fifth stage wraps to the first stage after another two hours, repeating until REVERSE or subscriber /stop. No second immediate copy is sent by /start. Delivery progress is saved in Neon and survives redeployment. The rotation queue is separate from custom one-off broadcasts. Blocked users and /stop users are excluded; /start opts back in.
 
-The screenshot messages are plain English translations, not modified screenshot image files. Neither the screenshots nor their earnings claims were independently verified. Do not claim guaranteed or typical returns. If the image claims are not authorized for sharing, replace them with original educational market content.
+Each testimonial is now delivered as one Telegram **photo with an English caption**, rather than a separate text-only message. The original JPG screenshots are kept unchanged (the Joaquín and Rubin pixels are in Spanish; their captions supply the English translation). If an image is absent at deployment, the bot falls back to text and logs an error. Neither the screenshots nor their earnings claims were independently verified. Do not claim guaranteed or typical returns. If the image claims are not authorized for sharing, replace them with original educational market content.
 
 **Important:** An interrupted or timed-out send may have reached Telegram. To prioritize avoiding duplicate rotation posts, the scheduler moves forward after an ambiguous network failure or an interrupted in-flight send rather than retrying that same step. Consequently, one message can occasionally be skipped. Rate-limited sends are retried later.
 
