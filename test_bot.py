@@ -171,6 +171,44 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(telegram.send_message.await_args.args[1], MESSAGES[4][0])
         self.assertEqual(telegram.send_message.await_args.kwargs['reply_markup'].inline_keyboard[0][0].url, ADMIN_URL)
 
+    async def test_admin_receives_first_message_immediately_on_redirect_and_on_restart(self):
+        bot.store.started(user(99))
+        bot.store.started(user(1))
+        api = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock(),
+                              copy_message=AsyncMock())
+        message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
+                                  bot=api, edit_text=AsyncMock(), answer=AsyncMock())
+        await bot.action(message, 'redirect', edit=True)
+        self.assertEqual(api.send_message.await_count, 1)
+        first = api.send_message.await_args
+        self.assertEqual(first.args[0], 99)
+        self.assertIn('DREW FX | FOREX COMMUNITY', first.args[1])
+        self.assertEqual(first.kwargs['reply_markup'].inline_keyboard[0][0].url,
+                         'https://t.me/DrewFXHub')
+        self.assertEqual(bot.store.next_rotation()['user_id'], 1)
+        self.assertEqual(bot.store.rotation_for_user(99), None)
+        await bot.action(message, 'redirect', edit=True)
+        self.assertEqual(api.send_message.await_count, 2)
+        self.assertEqual(api.send_message.await_args.args[0], 99)
+        self.assertEqual(bot.store.next_rotation()['step'], 0)
+
+    async def test_admin_preview_five_messages_does_not_change_schedules(self):
+        from rotation import MESSAGES
+        bot.store.started(user(99))
+        bot.store.started(user(1))
+        campaign = bot.store.enable_redirect(99)
+        api = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock(),
+                              copy_message=AsyncMock())
+        message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
+                                  bot=api, answer=AsyncMock(), edit_text=AsyncMock())
+        await bot.action(message, 'preview', edit=False)
+        self.assertEqual(api.send_message.await_count, 2)
+        self.assertEqual(api.send_photo.await_count, 3)
+        self.assertEqual(message.answer.await_count, 2)
+        self.assertEqual(bot.store.rotation_for_user(99)['step'], 0)
+        self.assertEqual(bot.store.next_rotation()['campaign'], campaign)
+        self.assertIn('DREW FX', MESSAGES[0][0])
+
     async def test_custom_redirect_intro_is_used_instead_of_default_intro(self):
         bot.store.started(user(1))
         bot.store.set('redirect_chat', 99)
@@ -199,7 +237,8 @@ class AdminPanelReuseTests(BotTests):
 
     async def test_repeated_callback_edits_existing_panel(self):
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=99),
-            edit_text=AsyncMock(), answer=AsyncMock())
+            edit_text=AsyncMock(), answer=AsyncMock(),
+            bot=SimpleNamespace(send_message=AsyncMock()))
         await bot.action(message, 'redirect', edit=True)
         message.edit_text.assert_awaited_once()
         message.answer.assert_not_awaited()
