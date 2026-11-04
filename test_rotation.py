@@ -18,7 +18,7 @@ class RotationStorageTests(unittest.TestCase):
 
     def test_five_stage_cycle_every_two_hours(self):
         self.s.started(user(1))
-        campaign = self.s.enable_redirect(exclude_id=99)
+        campaign = self.s.enable_redirect(admin_id=99)
         now = int(time.time()) + 5
         for step in range(ROTATION_COUNT):
             row = self.s.next_rotation(now=now)
@@ -53,17 +53,32 @@ class RotationStorageTests(unittest.TestCase):
         self.s.started(user(1))
         self.assertEqual(self.s.next_rotation()['step'], 0)
 
-    def test_excludes_admin_and_keeps_progress_after_start(self):
+    def test_includes_admin_and_keeps_progress_after_start(self):
         self.s.started(user(1))
         self.s.started(user(99))
         campaign = self.s.enable_redirect(99)
-        self.assertEqual(self.s.next_rotation()['user_id'], 1)
         now = int(time.time()) + 3
-        self.assertTrue(self.s.claim_rotation(campaign, 1, 0, now=now))
-        self.s.finish_rotation(campaign, 1, 0, 'sent', now=now)
+        self.assertEqual(self.s.rotation_for_user(99, now=now)['step'], 0)
+        for uid in (1, 99):
+            self.assertTrue(self.s.claim_rotation(campaign, uid, 0, now=now))
+            self.s.finish_rotation(campaign, uid, 0, 'sent', now=now)
         self.s.started(user(1), 99)
         self.s.started(user(99), 99)
         self.assertIsNone(self.s.next_rotation(now=now))
+
+    def test_explicit_redirect_restart_requeues_immediate_step_for_admin_and_users(self):
+        self.s.started(user(1))
+        self.s.started(user(99))
+        first = self.s.enable_redirect(99)
+        when = int(time.time()) + 3
+        self.assertTrue(self.s.claim_rotation(first, 99, 0, now=when))
+        self.s.finish_rotation(first, 99, 0, 'sent', now=when)
+        second = self.s.enable_redirect(99, True)
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.s.rotation_for_user(99, now=when)['step'], 0)
+        self.assertEqual(self.s.next_rotation(now=when)['campaign'], second)
+        self.assertEqual(self.s.next_rotation(now=when)['step'], 0)
+        self.assertEqual(self.s.enable_redirect(99), second)
 
     def test_uncertain_send_not_replayed_on_restart(self):
         self.s.started(user(1))
