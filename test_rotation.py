@@ -133,9 +133,15 @@ class RotationStorageTests(unittest.TestCase):
         self.assertIn('SIGNALS', MESSAGES[-1][0])
         self.assertEqual(MESSAGES[-1][2], ADMIN_URL)
         self.assertIn('?text=SIGNALS', ADMIN_URL)
-        for index in (1, 2, 3):
-            self.assertIn('verif', MESSAGES[index][0].lower())
-        self.assertIn('No profits are guaranteed', MESSAGES[-1][0])
+        for index in range(len(MESSAGES)):
+            text = MESSAGES[index][0].lower()
+            for phrase in ('independently verified', 'trading involves risk',
+                           'trading carries risk', 'trading carries substantial risk',
+                           'no profits are guaranteed', 'no returns are promised',
+                           'not a typical-result claim', 'not a prediction'):
+                self.assertNotIn(phrase, text, f'stage {index + 1}: {phrase}')
+        for index, name in ((1, 'Ramiro'), (2, 'Joaquín'), (3, 'Rubin')):
+            self.assertIn(name, MESSAGES[index][0])
 
 
 if __name__ == '__main__':
