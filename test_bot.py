@@ -16,17 +16,17 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
                                   from_user=user(1), answer=AsyncMock(), bot=telegram)
         await bot.start(message)
         message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE, reply_markup=bot.community_keyboard())
-        bot.store.enable_redirect()
+        bot.store.enable_redirect(99)
         message.answer.reset_mock()
-        with patch.object(bot.Path, 'is_file', return_value=False):
-            await bot.start(message)
-            await bot.start(message)
-        message.answer.assert_not_awaited()
-        self.assertEqual(telegram.send_message.await_count, 1)
-        self.assertIsNone(bot.store.next_delivery())
+        await bot.start(message)
+        await bot.start(message)
+        self.assertEqual(message.answer.await_count, 1)
+        self.assertIn('updates are active', message.answer.await_args.args[0])
+        self.assertEqual(telegram.send_message.await_count, 0)
+        self.assertEqual(bot.store.next_rotation()['step'], 0)
         bot.store.reverse()
         await bot.start(message)
-        message.answer.assert_awaited_once_with(bot.DEFAULT_MESSAGE, reply_markup=bot.community_keyboard())
+        self.assertEqual(message.answer.await_args.args[0], bot.DEFAULT_MESSAGE)
 
     async def test_two_workers_send_one_queued_post(self):
         bot.store.started(user(1))
@@ -39,17 +39,21 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*tasks, return_exceptions=True)
         telegram.send_message.assert_awaited_once_with(1, 'one post')
 
-    async def test_start_copies_actual_custom_redirect_once(self):
+    async def test_custom_intro_is_copied_once_by_worker(self):
         bot.store.set('redirect_chat', 99)
         bot.store.set('redirect_message', 123)
-        bot.store.enable_redirect()
-        telegram = SimpleNamespace(copy_message=AsyncMock())
+        bot.store.enable_redirect(99)
+        telegram = SimpleNamespace(copy_message=AsyncMock(), send_message=AsyncMock())
         message = SimpleNamespace(chat=SimpleNamespace(type='private', id=1),
                                   from_user=user(1), answer=AsyncMock(), bot=telegram)
         await bot.start(message)
+        task = asyncio.create_task(bot.rotation_worker(telegram))
+        await asyncio.sleep(0.12)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         telegram.copy_message.assert_awaited_once_with(1, 99, 123)
-        message.answer.assert_not_awaited()
-        self.assertIsNone(bot.store.next_delivery())
+        self.assertIsNone(bot.store.next_rotation())
+        self.assertEqual(message.answer.await_count, 1)
 
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -116,35 +120,33 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         await bot.compose(message)
         self.assertEqual(bot.store.db.execute('SELECT COUNT(*) FROM campaigns').fetchone()[0], 0)
 
-    async def test_reverse_personalizes_and_adds_join_button(self):
+    async def test_rotation_first_post_has_community_button(self):
         bot.store.started(user(1))
-        campaign = bot.store.enable_redirect()
+        campaign = bot.store.enable_redirect(99)
         telegram = SimpleNamespace(send_message=AsyncMock(), copy_message=AsyncMock())
-        task = asyncio.create_task(bot.worker(telegram))
+        task = asyncio.create_task(bot.rotation_worker(telegram))
         await asyncio.sleep(0.12)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         call = telegram.send_message.await_args
-        self.assertTrue(call.args[1].startswith('Test, DON’T MISS OUT AGAIN! 🔥'))
+        self.assertIn('DREW FX | FOREX COMMUNITY', call.args[1])
         self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/DrewFXHub')
         bot.store.started(user(2))
-        self.assertEqual(bot.store.next_delivery()['id'], campaign)
-        self.assertEqual(bot.store.next_delivery()['user_id'], 2)
+        self.assertEqual(bot.store.next_rotation()['campaign'], campaign)
+        self.assertEqual(bot.store.next_rotation()['user_id'], 2)
 
-    async def test_reverse_attaches_uploaded_image(self):
+    async def test_custom_redirect_intro_is_used_instead_of_default_intro(self):
         bot.store.started(user(1))
-        bot.store.enable_redirect()
-        telegram = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
-        with patch.object(bot.Path, 'is_file', return_value=True):
-            task = asyncio.create_task(bot.worker(telegram))
-            await asyncio.sleep(0.12)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        call = telegram.send_photo.await_args
-        self.assertTrue(call.kwargs['caption'].startswith('Test, DON’T MISS OUT AGAIN!'))
-        self.assertEqual(call.kwargs['reply_markup'].inline_keyboard[0][0].url, 'https://t.me/DrewFXHub')
+        bot.store.set('redirect_chat', 99)
+        bot.store.set('redirect_message', 456)
+        bot.store.enable_redirect(99)
+        telegram = SimpleNamespace(copy_message=AsyncMock(), send_message=AsyncMock())
+        task = asyncio.create_task(bot.rotation_worker(telegram))
+        await asyncio.sleep(0.12)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        telegram.copy_message.assert_awaited_once_with(1, 99, 456)
         telegram.send_message.assert_not_awaited()
-
 
 
 
