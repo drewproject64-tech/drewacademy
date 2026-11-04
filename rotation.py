@@ -20,8 +20,7 @@ MESSAGES = (
         "We will also share English translations of community screenshots. "
         "These claims have not been independently verified and are not typical or "
         "promised results.\n\n"
-        "Explore the community below. /stop opts out of updates.\n"
-        "⚠️ Forex trading carries risk and losses are possible.",
+        "Explore DREW FX market insights and community discussions below.",
         "🌐 JOIN DREW FX COMMUNITY",
         COMMUNITY_URL,
     ),
@@ -72,8 +71,7 @@ MESSAGES = (
         "🔗 https://t.me/DrewFXHub\n\n"
         "💎 Subscribe: @DrewFX_Checkout_Bot\n\n"
         "📩 To speak with the admin, tap the button and send SIGNALS.\n\n"
-        "⚠️ Forex trading involves risk. No profits are guaranteed.\n"
-        "Send /stop to opt out of bot updates.",
+        "⚠️ Forex trading involves risk. No profits are guaranteed.",
         "📩 MESSAGE ADMIN — SIGNALS",
         ADMIN_URL,
     ),
