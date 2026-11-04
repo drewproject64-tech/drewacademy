@@ -272,8 +272,12 @@ async def send_rotation_payload(bot, row):
         source_chat = await dbcall('get', 'redirect_chat')
         source_message = await dbcall('get', 'redirect_message')
         if source_chat and source_message:
-            await bot.copy_message(row['user_id'], int(source_chat), int(source_message))
-            return
+            try:
+                await bot.copy_message(row['user_id'], int(source_chat), int(source_message))
+                return
+            except TelegramBadRequest:
+                # The old source message may have been deleted by the admin.
+                logging.warning('Custom first post unavailable; sending built-in introduction.')
     await bot.send_message(row['user_id'], text, reply_markup=rotation_keyboard(step))
 
 
@@ -301,8 +305,11 @@ async def rotation_worker(bot):
                     await dbcall('finish_rotation', row['campaign'], row['user_id'],
                                  row['step'], 'failed')
                 except (TelegramNetworkError, OSError):
+                    # After a network timeout, Telegram may have received the post.
+                    # Move to the next step rather than risk repeating the same post.
+                    logging.warning('Uncertain rotation send for user %s; skipping retry to avoid duplicates', row['user_id'])
                     await dbcall('finish_rotation', row['campaign'], row['user_id'],
-                                 row['step'], 'pending', 60)
+                                 row['step'], 'sent')
                 else:
                     await dbcall('finish_rotation', row['campaign'], row['user_id'],
                                  row['step'], 'sent')
