@@ -22,6 +22,11 @@ def schema(postgres=False):
         '''CREATE TABLE IF NOT EXISTS deliveries (campaign BIGINT, user_id BIGINT,
         status TEXT DEFAULT 'pending', PRIMARY KEY(campaign,user_id))''',
         'CREATE INDEX IF NOT EXISTS deliveries_pending_idx ON deliveries(status,campaign,user_id)',
+        '''CREATE TABLE IF NOT EXISTS rotations (
+        user_id BIGINT PRIMARY KEY, campaign BIGINT NOT NULL,
+        step INTEGER NOT NULL DEFAULT 0, due_at BIGINT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending')''',
+        'CREATE INDEX IF NOT EXISTS rotations_due_idx ON rotations(status,due_at)',
     ]
 
 
@@ -100,17 +105,29 @@ class Storage:
         return campaign
 
     def enable_redirect(self, exclude_id=0):
+        """Start one persistent two-hour rotation, without resending on repeat clicks."""
+        import time
         with self.transaction():
-            # Repeated button presses must not resend the same campaign.
-            if self.get('mode') == 'redirect':
-                return int(self.get('redirect_campaign'))
-            source_chat = self.get('redirect_chat')
-            source_message = self.get('redirect_message')
-            campaign = self.campaign(REVERSE_MESSAGE, int(source_chat) if source_chat else None,
-                                     int(source_message) if source_message else None, exclude_id)
+            existing = self.get('rotation_campaign')
+            if (self.get('mode') == 'redirect' and existing and
+                    self.get('redirect_campaign') == existing):
+                return int(existing)
+            old = self.get('redirect_campaign')
+            if old:
+                self.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (int(old),))
+            row = self.execute('INSERT INTO campaigns(text) VALUES (?) RETURNING id',
+                               ('DREW FX ROTATION',)).fetchone()
+            campaign = int(row['id'])
+            now = int(time.time())
+            self.execute("UPDATE rotations SET status='cancelled' WHERE status IN ('pending','sending')")
+            self.execute("""INSERT INTO rotations(user_id,campaign,step,due_at,status)
+                SELECT id,?,0,?,'pending' FROM users WHERE active=1 AND id<>?
+                ON CONFLICT(user_id) DO UPDATE SET campaign=excluded.campaign,
+                  step=0,due_at=excluded.due_at,status='pending'""", (campaign, now, exclude_id))
             self.set('mode', 'redirect')
             self.set('redirect_campaign', campaign)
-        return campaign
+            self.set('rotation_campaign', campaign)
+            return campaign
 
     def reverse(self):
         with self.transaction():
@@ -118,15 +135,31 @@ class Storage:
                 previous = self.get(key)
                 if previous:
                     self.execute('UPDATE campaigns SET cancelled=1 WHERE id=?', (int(previous),))
+            self.execute("UPDATE rotations SET status='cancelled' WHERE status IN ('pending','sending')")
             self.set('mode', 'normal')
+            self.set('rotation_campaign', '')
             self.execute("DELETE FROM settings WHERE key='normal_campaign'")
 
-    def started(self, user):
+    def started(self, user, exclude_id=0):
+        import time
         with self.transaction():
             self.save_user(user)
             self.execute('UPDATE users SET active=1 WHERE id=?', (user.id,))
-            if self.get('mode') == 'redirect' and self.get('redirect_campaign'):
-                self.execute('INSERT INTO deliveries(campaign,user_id) VALUES (?,?) ON CONFLICT(campaign,user_id) DO NOTHING', (int(self.get('redirect_campaign')), user.id))
+            campaign = self.get('rotation_campaign')
+            if (user.id != exclude_id and self.get('mode') == 'redirect' and campaign):
+                self.execute("""INSERT INTO rotations(user_id,campaign,step,due_at,status)
+                    VALUES (?,?,0,?,'pending')
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        campaign=excluded.campaign,
+                        step=CASE WHEN rotations.status IN ('cancelled','blocked','failed')
+                                   OR rotations.campaign<>excluded.campaign THEN 0 ELSE rotations.step END,
+                        due_at=CASE WHEN rotations.status IN ('cancelled','blocked','failed')
+                                      OR rotations.campaign<>excluded.campaign
+                                    THEN excluded.due_at ELSE rotations.due_at END,
+                        status=CASE WHEN rotations.status IN ('cancelled','blocked','failed')
+                                      OR rotations.campaign<>excluded.campaign
+                                    THEN 'pending' ELSE rotations.status END""",
+                    (user.id, int(campaign), int(time.time())))
 
     def claim_update(self, update_id):
         import time
@@ -177,14 +210,67 @@ class Storage:
             return row is not None
 
     def recover_deliveries(self):
-        # Only run after obtaining the process lease, with no other worker live.
+        # On restart, an uncertain rotation send is skipped instead of repeated.
+        # This provides at-most-once attempts for a rotation step across rollouts.
+        import time
+        from rotation import ROTATION_COUNT, ROTATION_INTERVAL_SECONDS
         with self.transaction():
             self.execute("UPDATE deliveries SET status='pending' WHERE status='sending'")
+            self.execute("""UPDATE rotations SET step=(step+1)%?,
+                due_at=?,status='pending' WHERE status='sending'""",
+                (ROTATION_COUNT, int(time.time()) + ROTATION_INTERVAL_SECONDS))
+
+    def next_rotation(self, now=None):
+        import time
+        now = int(time.time() if now is None else now)
+        with self.transaction():
+            campaign = self.get('rotation_campaign')
+            if self.get('mode') != 'redirect' or not campaign:
+                return None
+            row = self.execute("""SELECT r.user_id,r.campaign,r.step,r.due_at,u.first_name
+                FROM rotations r JOIN users u ON u.id=r.user_id
+                WHERE r.status='pending' AND r.campaign=? AND r.due_at<=?
+                  AND u.active=1 ORDER BY r.due_at,r.user_id LIMIT 1""",
+                (int(campaign), now)).fetchone()
+            return dict(row) if row else None
+
+    def claim_rotation(self, campaign, user_id, step, now=None):
+        import time
+        now = int(time.time() if now is None else now)
+        with self.transaction():
+            if self.get('mode') != 'redirect' or self.get('rotation_campaign') != str(campaign):
+                return False
+            row = self.execute("""UPDATE rotations SET status='sending'
+                WHERE campaign=? AND user_id=? AND step=? AND status='pending' AND due_at<=?
+                AND EXISTS (SELECT 1 FROM users WHERE id=? AND active=1)
+                RETURNING user_id""", (campaign,user_id,step,now,user_id)).fetchone()
+            return row is not None
+
+    def finish_rotation(self, campaign, user_id, step, status, delay=0, now=None):
+        import time
+        from rotation import ROTATION_COUNT, ROTATION_INTERVAL_SECONDS
+        now = int(time.time() if now is None else now)
+        with self.transaction():
+            if status == 'sent':
+                self.execute("""UPDATE rotations SET step=?,due_at=?,status='pending'
+                    WHERE user_id=? AND campaign=? AND step=? AND status='sending'""",
+                    ((step+1)%ROTATION_COUNT, now+ROTATION_INTERVAL_SECONDS, user_id, campaign, step))
+            elif status == 'pending':
+                self.execute("""UPDATE rotations SET due_at=?,status='pending'
+                    WHERE user_id=? AND campaign=? AND step=? AND status='sending'""",
+                    (now+max(5,int(delay)), user_id, campaign, step))
+            else:
+                self.execute("""UPDATE rotations SET status=?
+                    WHERE user_id=? AND campaign=? AND step=? AND status='sending'""",
+                    (status, user_id, campaign, step))
+                if status == 'blocked':
+                    self.deactivate(user_id)
 
     def deactivate(self, user_id):
         with self.transaction():
             self.execute('UPDATE users SET active=0 WHERE id=?', (user_id,))
             self.execute("UPDATE deliveries SET status='cancelled' WHERE user_id=? AND status='pending'", (user_id,))
+            self.execute("UPDATE rotations SET status='cancelled' WHERE user_id=? AND status IN ('pending','sending')", (user_id,))
 
     def next_delivery(self):
         with self.transaction():
